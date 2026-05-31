@@ -1,0 +1,1058 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Apple Minimalist fitting HUD</title>
+    <style>
+        /* Apple System Settings Minimalist Style */
+        :root {
+            --bg-color: #1c1c1e;
+            --card-color: #2c2c2e;
+            --accent-color: #0a84ff; /* SF Pro Blue */
+            --border-color: #3a3a3c;
+            --text-color: #ffffff;
+            --text-secondary: #8e8e93;
+            --font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "Helvetica Neue", Helvetica, Arial, sans-serif;
+        }
+
+        body {
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            font-family: var(--font-family);
+            margin: 0;
+            padding: 0;
+            overflow: hidden !important; /* スクロールバーを完全に排除し二重スクロールを封殺 */
+            user-select: none;
+            -webkit-user-select: none;
+        }
+
+        .container {
+            display: grid;
+            grid-template-columns: 3fr 2fr;
+            gap: 20px;
+            padding: 10px;
+            max-width: 100%;
+            margin: 0 auto;
+            box-sizing: border-box;
+            height: 700px;
+        }
+
+        /* 左カラム: プレビューCanvasエリア */
+        .preview-area {
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            background: #000000;
+            border-radius: 12px;
+            border: 1px solid var(--border-color);
+            overflow: hidden;
+            position: relative;
+            height: 680px;
+        }
+
+        #hudCanvas {
+            max-width: 100%;
+            max-height: 100%;
+            object-fit: contain;
+            display: block;
+        }
+
+        /* 右カラム: Apple風コントロールパネル */
+        .control-panel {
+            background: var(--bg-color);
+            border-radius: 12px;
+            display: flex;
+            flex-direction: column;
+            height: 680px;
+            box-sizing: border-box;
+        }
+
+        .scrollable-content {
+            flex-grow: 1;
+            overflow-y: auto;
+            padding-right: 8px;
+        }
+
+        /* スクロールバーのAppleライクなカスタム */
+        .scrollable-content::-webkit-scrollbar {
+            width: 8px;
+        }
+        .scrollable-content::-webkit-scrollbar-track {
+            background: transparent;
+        }
+        .scrollable-content::-webkit-scrollbar-thumb {
+            background: #48484a;
+            border-radius: 4px;
+        }
+
+        /* Apple Pro カードセクション */
+        .card {
+            background: var(--card-color);
+            border-radius: 12px;
+            padding: 16px;
+            margin-bottom: 16px;
+            border: 1px solid rgba(255, 255, 255, 0.02);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+        }
+
+        .card-title {
+            font-size: 14px;
+            font-weight: 700;
+            color: var(--text-color);
+            margin-top: 0;
+            margin-bottom: 14px;
+            letter-spacing: -0.01em;
+            border-bottom: 1px solid var(--border-color);
+            padding-bottom: 8px;
+        }
+
+        /* ロール選択スイッチ (FP / GK) */
+        .role-switch-container {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            background: #121212;
+            padding: 3px;
+            border-radius: 8px;
+            margin-bottom: 16px;
+            border: 1px solid var(--border-color);
+        }
+
+        .role-btn {
+            background: transparent;
+            border: none;
+            color: var(--text-secondary);
+            font-size: 13px;
+            font-weight: 600;
+            padding: 8px;
+            border-radius: 6px;
+            cursor: pointer;
+            transition: all 0.2s cubic-bezier(0.25, 0.8, 0.25, 1);
+        }
+
+        .role-btn.active {
+            background: var(--card-color);
+            color: var(--text-color);
+            box-shadow: 0 2px 8px rgba(0,0,0,0.25);
+        }
+
+        /* 項目選択トグルリスト (すっきりとしたグリッド) */
+        .items-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
+            gap: 8px;
+            margin-bottom: 12px;
+        }
+
+        .item-checkbox-label {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: #1c1c1e;
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            padding: 6px 4px;
+            font-size: 11px;
+            font-weight: 500;
+            color: var(--text-secondary);
+            cursor: pointer;
+            transition: all 0.15s ease;
+            text-align: center;
+        }
+
+        .item-checkbox-label input {
+            display: none;
+        }
+
+        .item-checkbox-label.active {
+            background: rgba(10, 132, 255, 0.15);
+            border-color: var(--accent-color);
+            color: var(--text-color);
+            font-weight: 600;
+        }
+
+        /* Apple純正スライダー行デザイン */
+        .slider-row {
+            margin-bottom: 14px;
+        }
+
+        .slider-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 12px;
+            color: var(--text-secondary);
+            margin-bottom: 6px;
+            font-weight: 500;
+        }
+
+        .slider-value {
+            color: var(--accent-color);
+            font-weight: 600;
+            font-family: "SF Mono", monospace;
+            font-size: 11px;
+        }
+
+        .slider-container {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .apple-slider {
+            -webkit-appearance: none;
+            width: 100%;
+            height: 4px;
+            border-radius: 2px;
+            background: #3a3a3c;
+            outline: none;
+            margin: 0;
+            padding: 0;
+        }
+
+        .apple-slider::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 16px;
+            height: 16px;
+            border-radius: 50%;
+            background: #ffffff;
+            cursor: pointer;
+            box-shadow: 0 2px 6px rgba(0,0,0,0.3);
+            border: 0.5px solid rgba(0,0,0,0.05);
+            transition: transform 0.1s ease;
+        }
+
+        .apple-slider::-webkit-slider-thumb:active {
+            transform: scale(1.2);
+        }
+
+        /* アコーディオンヘッダー */
+        .accordion {
+            background: var(--card-color);
+            border-radius: 12px;
+            margin-bottom: 12px;
+            border: 1px solid rgba(255, 255, 255, 0.02);
+            overflow: hidden;
+        }
+
+        .accordion-header {
+            padding: 14px 16px;
+            font-size: 13px;
+            font-weight: 700;
+            cursor: pointer;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            user-select: none;
+            border-bottom: 1px solid transparent;
+        }
+
+        .accordion.open .accordion-header {
+            border-bottom-color: var(--border-color);
+        }
+
+        .accordion-content {
+            padding: 0 16px;
+            max-height: 0;
+            overflow: hidden;
+            transition: max-height 0.25s cubic-bezier(0.25, 0.8, 0.25, 1), padding 0.25s ease;
+        }
+
+        .accordion.open .accordion-content {
+            padding: 16px;
+            max-height: 2000px;
+            overflow-y: visible;
+        }
+
+        .accordion-arrow {
+            width: 12px;
+            height: 12px;
+            border-left: 2px solid var(--text-secondary);
+            border-bottom: 2px solid var(--text-secondary);
+            transform: rotate(-45deg);
+            transition: transform 0.2s ease;
+            transform-origin: 25% 75%;
+        }
+
+        .accordion.open .accordion-arrow {
+            transform: rotate(135deg);
+        }
+
+        /* 解析実行ボタン */
+        .action-button {
+            background: var(--accent-color);
+            color: #ffffff;
+            font-size: 14px;
+            font-weight: 600;
+            border: none;
+            border-radius: 10px;
+            padding: 12px;
+            cursor: pointer;
+            transition: background 0.2s ease;
+            width: 100%;
+            margin-top: 10px;
+            box-shadow: 0 4px 16px rgba(10, 132, 255, 0.3);
+        }
+
+        .action-button:hover {
+            background: #359aff;
+        }
+
+        .action-button:active {
+            background: #006adc;
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <!-- 左カラム: 枠線リアルタイムCanvas -->
+    <div class="preview-area">
+        <canvas id="hudCanvas"></canvas>
+    </div>
+
+    <!-- 右カラム: Apple風コントロールパネル -->
+    <div class="control-panel">
+        <div class="scrollable-content">
+            
+            <!-- ロール選択 -->
+            <div class="role-switch-container">
+                <button id="btnFP" class="role-btn active" onclick="setRole(false)">Field Player</button>
+                <button id="btnGK" class="role-btn" onclick="setRole(true)">Goal Keeper</button>
+            </div>
+
+            <!-- 項目トグルチェックリスト -->
+            <div class="card">
+                <div class="card-title">読み取り有効項目</div>
+                <div class="items-grid" id="itemsGrid">
+                    <!-- JSで動的生成 -->
+                </div>
+            </div>
+
+            <!-- 案A: グローバル (全体) 調整 -->
+            <div class="card">
+                <div class="card-title">全体アライメント (Global)</div>
+                <div class="slider-row">
+                    <div class="slider-header"><span>全体 X シフト</span><span class="slider-value" id="val_g_x">0 px</span></div>
+                    <div class="slider-container">
+                        <input type="range" class="apple-slider" id="sld_g_x" min="-1920" max="1920" value="0" oninput="updateParam('g_x', this.value)">
+                    </div>
+                </div>
+                <div class="slider-row">
+                    <div class="slider-header"><span>全体 Y シフト</span><span class="slider-value" id="val_g_y">0 px</span></div>
+                    <div class="slider-container">
+                        <input type="range" class="apple-slider" id="sld_g_y" min="-1080" max="1080" value="0" oninput="updateParam('g_y', this.value)">
+                    </div>
+                </div>
+                <div class="slider-row">
+                    <div class="slider-header"><span>全体 X スケール (幅)</span><span class="slider-value" id="val_g_s_x">1.00 x</span></div>
+                    <div class="slider-container">
+                        <input type="range" class="apple-slider" id="sld_g_s_x" min="0.10" max="3.00" step="0.01" value="1.00" oninput="updateParam('g_s_x', this.value)">
+                    </div>
+                </div>
+                <div class="slider-row">
+                    <div class="slider-header"><span>全体 Y スケール (高さ)</span><span class="slider-value" id="val_g_s_y">1.00 x</span></div>
+                    <div class="slider-container">
+                        <input type="range" class="apple-slider" id="sld_g_s_y" min="0.10" max="3.00" step="0.01" value="1.00" oninput="updateParam('g_s_y', this.value)">
+                    </div>
+                </div>
+            </div>
+
+            <!-- 案A: グループ別調整 (アコーディオン) -->
+            <div class="accordion" id="accGroups">
+                <div class="accordion-header" onclick="toggleAccordion('accGroups')">
+                    <span>グループ一括調整 (案A)</span>
+                    <div class="accordion-arrow"></div>
+                </div>
+                <div class="accordion-content" id="groupsContainer">
+                    <!-- JSでグループごとのスライダーを動的生成 -->
+                </div>
+            </div>
+
+            <!-- 案B: 項目別個別微調整 (アコーディオン) -->
+            <div class="accordion" id="accIndiv">
+                <div class="accordion-header" onclick="toggleAccordion('accIndiv')">
+                    <span>項目別個別1px微調整 (案B)</span>
+                    <div class="accordion-arrow"></div>
+                </div>
+                <div class="accordion-content" id="indivContainer">
+                    <!-- JSで個別項目の微調整コントロールを動的生成 -->
+                </div>
+            </div>
+
+        </div>
+
+        <!-- アクションエリア -->
+        <button class="action-button" onclick="triggerAnalysis()">選択座標で解析を実行</button>
+    </div>
+</div>
+
+<script>
+    // postMessage通信プロトコル (CORSセキュリティ境界を安全に突破)
+    function sendControlMessage(type, payload = {}) {
+        window.parent.postMessage(Object.assign({
+            isStreamlitMessage: true,
+            type: type
+        }, payload), "*");
+    }
+
+    function sendMessage(type, data) {
+        const payload = { type: type, data: data };
+        sendControlMessage("streamlit:setComponentValue", { value: payload });
+    }
+
+    function initializeConnection() {
+        // Streamlitへマウント準備完了を通知
+        sendControlMessage("streamlit:componentReady", { apiVersion: 1 });
+        // 親フレームに対し高さを正確に指定して非表示化を防ぐ
+        sendControlMessage("streamlit:setFrameHeight", { height: 720 });
+    }
+
+    // デフォルト座標設定 (1920x1080基準)
+    const DEFAULT_ROIS = {
+        "総合力": [30, 245, 150, 70],
+        "SHO数値": [820, 285, 115, 85],
+        "PAS数値": [995, 285, 115, 85],
+        "DRB数値": [1195, 285, 95, 85],
+        "DEF数値": [1345, 285, 115, 85],
+        "PHY数値": [1520, 285, 115, 85],
+        "SPD数値": [1695, 285, 115, 85],
+        "決定力": [730, 453, 170, 38],
+        "ショートパス": [905, 453, 170, 38],
+        "突破力": [1080, 453, 170, 38],
+        "タックル": [1255, 453, 170, 38],
+        "ジャンプ": [1430, 453, 170, 38],
+        "走力": [1605, 453, 170, 38],
+        "キック力": [730, 543, 170, 38],
+        "ロングパス": [905, 543, 170, 38],
+        "キープ力": [1080, 543, 170, 38],
+        "パスカット": [1255, 543, 170, 38],
+        "コンタクト": [1430, 543, 170, 38],
+        "敏捷性": [1605, 543, 170, 38],
+        "冷静さ": [730, 633, 170, 38],
+        "キック精度": [905, 633, 170, 38],
+        "ボールタッチ": [1080, 633, 170, 38],
+        "マーク": [1255, 633, 170, 38],
+        "スタミナ": [1430, 633, 170, 38]
+    };
+
+    const GROUPS = {
+        "overall": ["総合力"],
+        "category": ["SHO数値", "PAS数値", "DRB数値", "DEF数値", "PHY数値", "SPD数値"],
+        "sho": ["決定力", "キック力", "冷静さ"],
+        "pas": ["ショートパス", "ロングパス", "キック精度"],
+        "drb": ["突破力", "キープ力", "ボールタッチ"],
+        "def": ["タックル", "パスカット", "マーク"],
+        "phy": ["ジャンプ", "コンタクト", "スタミナ"],
+        "spd": ["走力", "敏捷性"]
+    };
+
+    const GK_ALIASES = {
+        "タックル": "セービング",
+        "パスカット": "反応速度",
+        "マーク": "1対1"
+    };
+
+    // 状態管理用オブジェクト
+    let state = {
+        isGk: false,
+        activeItems: [],
+        g_x: 0,
+        g_y: 0,
+        g_s_x: 1.0,
+        g_s_y: 1.0,
+        group_offsets: {},
+        group_scales: {},
+        individual_offsets: {},
+        individual_scales: {}
+    };
+
+    // 直前に送信した最新の状態のキャッシュ (非同期上書き戻りバグを完全封殺するためのローカル権限キャッシュ)
+    let lastSentState = null;
+
+    // グループ別・個別調整の初期値設定
+    Object.keys(GROUPS).forEach(grp => {
+        state.group_offsets[grp] = [0, 0];
+        state.group_scales[grp] = [1.0, 1.0];
+    });
+
+    // 画像オブジェクト
+    let bgImage = new Image();
+    let imageLoaded = false;
+    let canvas = document.getElementById("hudCanvas");
+    let ctx = canvas.getContext("2d");
+
+    // アコーディオンの開閉
+    function toggleAccordion(id) {
+        const acc = document.getElementById(id);
+        acc.classList.toggle("open");
+    }
+
+    // ポジション（ロール）の切り替え
+    function setRole(isGk) {
+        if (state.isGk === isGk) return;
+
+        // ロール切り替え前に、GKとFPの対応項目の値を相互にコピーして引き継ぐ (UXの劇的向上)
+        const mapGK = {"タックル": "セービング", "パスカット": "反応速度", "マーク": "1対1"};
+        const mapFP = {"セービング": "タックル", "反応速度": "パスカット", "1対1": "マーク"};
+        
+        const sourceMap = isGk ? mapGK : mapFP;
+        for (const [src, dst] of Object.entries(sourceMap)) {
+            if (state.individual_offsets[src]) {
+                state.individual_offsets[dst] = [...state.individual_offsets[src]];
+            }
+            if (state.individual_scales[src]) {
+                state.individual_scales[dst] = [...state.individual_scales[src]];
+            }
+        }
+
+        state.isGk = isGk;
+        document.getElementById("btnFP").classList.toggle("active", !isGk);
+        document.getElementById("btnGK").classList.toggle("active", isGk);
+        
+        // 項目のデフォルトON/OFFをプリセット
+        setupItemsGrid();
+        redrawHUD();
+        notifyStateChange();
+    }
+
+    // 有効項目チェックリストの構築
+    function setupItemsGrid() {
+        const grid = document.getElementById("itemsGrid");
+        grid.innerHTML = "";
+        state.activeItems = [];
+        
+        // 表示項目リストを作成
+        const baseList = ["総合力", "SHO数値", "PAS数値", "DRB数値", "DEF数値", "PHY数値", "SPD数値"];
+        const fpList = ["決定力", "キック力", "冷静さ", "ショートパス", "ロングパス", "キック精度", "突破力", "キープ力", "ボールタッチ", "タックル", "パスカット", "マーク", "ジャンプ", "コンタクト", "スタミナ", "走力", "敏捷性"];
+        const gkList = ["決定力", "キック力", "冷静さ", "ショートパス", "ロングパス", "キック精度", "突破力", "キープ力", "ボールタッチ", "セービング", "反応速度", "1対1", "ジャンプ", "コンタクト", "スタミナ", "走力", "敏捷性"];
+        
+        const list = baseList.concat(state.isGk ? gkList : fpList);
+
+        list.forEach(item => {
+            state.activeItems.push(item); // 初期値はすべてON
+            
+            const label = document.createElement("label");
+            label.className = "item-checkbox-label active";
+            label.id = `lbl_${item}`;
+            
+            const checkbox = document.createElement("input");
+            checkbox.type = "checkbox";
+            checkbox.checked = true;
+            checkbox.onchange = () => toggleItem(item, checkbox.checked);
+            
+            label.appendChild(checkbox);
+            label.appendChild(document.createTextNode(item));
+            grid.appendChild(label);
+        });
+
+        // 項目別個別スライダーUIの再構築
+        setupIndividualSliders(list);
+    }
+
+    function toggleItem(item, isChecked) {
+        const label = document.getElementById(`lbl_${item}`);
+        label.classList.toggle("active", isChecked);
+        
+        if (isChecked) {
+            if (!state.activeItems.includes(item)) state.activeItems.push(item);
+        } else {
+            state.activeItems = state.activeItems.filter(x => x !== item);
+        }
+        
+        // 個別微調整用のスライダーコンテナの表示/非表示を動的に制御
+        const row = document.getElementById(`indiv_row_${item}`);
+        if (row) row.style.display = isChecked ? "block" : "none";
+        
+        redrawHUD();
+        notifyStateChange();
+    }
+
+    // グループ別調整スライダーUIの動的構築
+    function setupGroupSliders() {
+        const container = document.getElementById("groupsContainer");
+        container.innerHTML = "";
+        
+        Object.keys(GROUPS).forEach(grp => {
+            const grpDisp = grp === "overall" ? "総合力" : grp === "category" ? "カテゴリー数値" : grp === "def" ? "DEF / GK特有項目" : grp.toUpperCase();
+            
+            const offX = state.group_offsets[grp] ? state.group_offsets[grp][0] : 0;
+            const offY = state.group_offsets[grp] ? state.group_offsets[grp][1] : 0;
+            const sclX = state.group_scales[grp] ? state.group_scales[grp][0] : 1.0;
+            const sclY = state.group_scales[grp] ? state.group_scales[grp][1] : 1.0;
+            
+            const div = document.createElement("div");
+            div.style.marginBottom = "20px";
+            div.innerHTML = `
+                <div style="font-size:12px; font-weight:700; color:#ffffff; margin-bottom:8px; border-left:2px solid var(--accent-color); padding-left:6px;">${grpDisp}</div>
+                
+                <div class="slider-row">
+                    <div class="slider-header"><span>X シフト</span><span class="slider-value" id="val_grp_x_${grp}">${offX} px</span></div>
+                    <input type="range" class="apple-slider" min="-1920" max="1920" value="${offX}" oninput="updateGroupParam('${grp}', 'x', this.value)" onchange="notifyStateChange()">
+                </div>
+                <div class="slider-row">
+                    <div class="slider-header"><span>Y シフト</span><span class="slider-value" id="val_grp_y_${grp}">${offY} px</span></div>
+                    <input type="range" class="apple-slider" min="-1080" max="1080" value="${offY}" oninput="updateGroupParam('${grp}', 'y', this.value)" onchange="notifyStateChange()">
+                </div>
+                <div class="slider-row">
+                    <div class="slider-header"><span>X スケール (幅)</span><span class="slider-value" id="val_grp_s_x_${grp}">${sclX.toFixed(2)} x</span></div>
+                    <input type="range" class="apple-slider" min="0.10" max="3.00" step="0.01" value="${sclX}" oninput="updateGroupParam('${grp}', 's_x', this.value)" onchange="notifyStateChange()">
+                </div>
+                <div class="slider-row">
+                    <div class="slider-header"><span>Y スケール (高さ)</span><span class="slider-value" id="val_grp_s_y_${grp}">${sclY.toFixed(2)} x</span></div>
+                    <input type="range" class="apple-slider" min="0.10" max="3.00" step="0.01" value="${sclY}" oninput="updateGroupParam('${grp}', 's_y', this.value)" onchange="notifyStateChange()">
+                </div>
+            `;
+            container.appendChild(div);
+        });
+    }
+
+    // 個別微調整スライダーUIの動的構築
+    function setupIndividualSliders(itemsList) {
+        const container = document.getElementById("indivContainer");
+        container.innerHTML = "";
+        
+        itemsList.forEach(item => {
+            // すでに値が存在する場合は初期化しない（GK/FP切り替え時のパラメータ移行保護）
+            if (!state.individual_offsets[item]) {
+                state.individual_offsets[item] = [0, 0];
+            }
+            if (!state.individual_scales[item]) {
+                state.individual_scales[item] = [1.0, 1.0];
+            }
+            
+            const offX = state.individual_offsets[item][0];
+            const offY = state.individual_offsets[item][1];
+            const sclX = state.individual_scales[item][0];
+            const sclY = state.individual_scales[item][1];
+
+            const div = document.createElement("div");
+            div.id = `indiv_row_${item}`;
+            div.style.marginBottom = "20px";
+            div.innerHTML = `
+                <div style="font-size:12px; font-weight:700; color:#ffffff; margin-bottom:8px; border-left:2px solid #a2a2a7; padding-left:6px;">${item}</div>
+                <div class="slider-row">
+                    <div class="slider-header"><span>個別 X シフト</span><span class="slider-value" id="val_ind_x_${item}">${offX} px</span></div>
+                    <input type="range" class="apple-slider" min="-1920" max="1920" value="${offX}" oninput="updateIndivParam('${item}', 'x', this.value)" onchange="notifyStateChange()">
+                </div>
+                <div class="slider-row">
+                    <div class="slider-header"><span>個別 Y シフト</span><span class="slider-value" id="val_ind_y_${item}">${offY} px</span></div>
+                    <input type="range" class="apple-slider" min="-1080" max="1080" value="${offY}" oninput="updateIndivParam('${item}', 'y', this.value)" onchange="notifyStateChange()">
+                </div>
+                <div class="slider-row">
+                    <div class="slider-header"><span>個別 X スケール</span><span class="slider-value" id="val_ind_s_x_${item}">${sclX.toFixed(2)} x</span></div>
+                    <input type="range" class="apple-slider" min="0.10" max="3.00" step="0.01" value="${sclX}" oninput="updateIndivParam('${item}', 's_x', this.value)" onchange="notifyStateChange()">
+                </div>
+                <div class="slider-row">
+                    <div class="slider-header"><span>個別 Y スケール</span><span class="slider-value" id="val_ind_s_y_${item}">${sclY.toFixed(2)} x</span></div>
+                    <input type="range" class="apple-slider" min="0.10" max="3.00" step="0.01" value="${sclY}" oninput="updateIndivParam('${item}', 's_y', this.value)" onchange="notifyStateChange()">
+                </div>
+            `;
+            container.appendChild(div);
+        });
+    }
+
+    // 各種パラメータ変更時の超速ハンドラ (ドラッグ中にリアルタイム動作)
+    function updateParam(key, value) {
+        state[key] = parseFloat(value);
+        
+        let unit = "px";
+        if (key.includes("s_")) unit = "x";
+        
+        document.getElementById(`val_${key}`).innerText = `${parseFloat(value).toFixed(unit === "x" ? 2 : 0)} ${unit}`;
+        
+        redrawHUD();
+    }
+    
+    // スライダーを離した（onchange相当）時のPython状態同期トリガー
+    document.querySelectorAll(".apple-slider").forEach(sld => {
+        sld.addEventListener("change", notifyStateChange);
+    });
+
+    function updateGroupParam(grp, type, value) {
+        const parsed = parseFloat(value);
+        if (type === 'x') {
+            state.group_offsets[grp][0] = parsed;
+            document.getElementById(`val_grp_x_${grp}`).innerText = `${parsed} px`;
+        } else if (type === 'y') {
+            state.group_offsets[grp][1] = parsed;
+            document.getElementById(`val_grp_y_${grp}`).innerText = `${parsed} px`;
+        } else if (type === 's_x') {
+            state.group_scales[grp][0] = parsed;
+            document.getElementById(`val_grp_s_x_${grp}`).innerText = `${parsed.toFixed(2)} x`;
+        } else if (type === 's_y') {
+            state.group_scales[grp][1] = parsed;
+            document.getElementById(`val_grp_s_y_${grp}`).innerText = `${parsed.toFixed(2)} x`;
+        }
+        redrawHUD();
+    }
+
+    function updateIndivParam(item, type, value) {
+        const parsed = parseFloat(value);
+        if (type === 'x') {
+            state.individual_offsets[item][0] = parsed;
+            document.getElementById(`val_ind_x_${item}`).innerText = `${parsed} px`;
+        } else if (type === 'y') {
+            state.individual_offsets[item][1] = parsed;
+            document.getElementById(`val_ind_y_${item}`).innerText = `${parsed} px`;
+        } else if (type === 's_x') {
+            state.individual_scales[item][0] = parsed;
+            document.getElementById(`val_ind_s_x_${item}`).innerText = `${parsed.toFixed(2)} x`;
+        } else if (type === 's_y') {
+            state.individual_scales[item][1] = parsed;
+            document.getElementById(`val_ind_s_y_${item}`).innerText = `${parsed.toFixed(2)} x`;
+        }
+        redrawHUD();
+    }
+
+    // Python側へのパラメータ通知 (スライダーのドラッグ完了時、または設定変更時)
+    function notifyStateChange() {
+        // 現在のローカルの最新状態をディープコピーしてキャッシュし、親からの古い上書きメッセージを無効化する
+        lastSentState = {
+            g_x: state.g_x,
+            g_y: state.g_y,
+            g_s_x: state.g_s_x,
+            g_s_y: state.g_s_y,
+            group_offsets: JSON.parse(JSON.stringify(state.group_offsets)),
+            group_scales: JSON.parse(JSON.stringify(state.group_scales)),
+            individual_offsets: JSON.parse(JSON.stringify(state.individual_offsets)),
+            individual_scales: JSON.parse(JSON.stringify(state.individual_scales))
+        };
+
+        sendMessage("update_state", {
+            isGk: state.isGk,
+            activeItems: state.activeItems,
+            global_scale_x: state.g_s_x,
+            global_scale_y: state.g_s_y,
+            global_offset: [state.g_x, state.g_y],
+            group_scales: state.group_scales,
+            group_offsets: state.group_offsets,
+            individual_scales: state.individual_scales,
+            individual_offsets: state.individual_offsets
+        });
+    }
+
+    // 解析実行トリガー (全パラメータ座標データと解析実行フラグを単一メッセージに一括同梱して送信し、通信競合を完璧に排除)
+    function triggerAnalysis() {
+        sendMessage("trigger_analysis", {
+            isGk: state.isGk,
+            activeItems: state.activeItems,
+            global_scale_x: state.g_s_x,
+            global_scale_y: state.g_s_y,
+            global_offset: [state.g_x, state.g_y],
+            group_scales: state.group_scales,
+            group_offsets: state.group_offsets,
+            individual_scales: state.individual_scales,
+            individual_offsets: state.individual_offsets
+        });
+    }
+
+    // 動的座標計算 (JavaScript移植版)
+    function calculateROI(itemName) {
+        let defaultKey = itemName;
+        if (state.isGk) {
+            // GKエイリアス解決
+            const revGk = {"セービング": "タックル", "反応速度": "パスカット", "1対1": "マーク"};
+            defaultKey = revGk[itemName] || itemName;
+        }
+
+        if (!DEFAULT_ROIS[defaultKey]) return null;
+        
+        const [defX, defY, defW, defH] = DEFAULT_ROIS[defaultKey];
+
+        // 所属グループの特定
+        let grpName = "overall";
+        for (const [gK, items] of Object.entries(GROUPS)) {
+            let resolved = [];
+            items.forEach(it => {
+                if (state.isGk && GK_ALIASES[it]) {
+                    resolved.push(GK_ALIASES[it]);
+                } else {
+                    resolved.push(it);
+                }
+            });
+            if (resolved.includes(itemName)) {
+                grpName = gK;
+                break;
+            }
+        }
+
+        // スケールの積算
+        const grpScale = state.group_scales[grpName] || [1.0, 1.0];
+        const indivScale = state.individual_scales[itemName] || [1.0, 1.0];
+
+        const totalScaleX = state.g_s_x * grpScale[0] * indivScale[0];
+        const totalScaleY = state.g_s_y * grpScale[1] * indivScale[1];
+
+        // オフセットの積算
+        const grpOff = state.group_offsets[grpName] || [0, 0];
+        const indivOff = state.individual_offsets[itemName] || [0, 0];
+
+        const finalX = Math.round(defX + state.g_x + grpOff[0] + indivOff[0]);
+        const finalY = Math.round(defY + state.g_y + grpOff[1] + indivOff[1]);
+        const finalW = Math.round(defW * totalScaleX);
+        const finalH = Math.round(defH * totalScaleY);
+
+        return [
+            Math.max(0, Math.min(finalX, 1919)),
+            Math.max(0, Math.min(finalY, 1079)),
+            Math.max(1, Math.min(finalW, 1920 - finalX)),
+            Math.max(1, Math.min(finalH, 1080 - finalY))
+        ];
+    }
+
+    // ゼロ遅延リアルタイム Canvas 再描画
+    function redrawHUD() {
+        if (!imageLoaded) return;
+        
+        // 1. キャンバスの解像度を1920x1080に設定
+        canvas.width = 1920;
+        canvas.height = 1080;
+        
+        // 2. 背景のゲーム画面画像を描画
+        ctx.drawImage(bgImage, 0, 0, 1920, 1080);
+        
+        // 3. 各項目の枠線とラベルのオーバーレイ描画
+        const colorActive = "#0a84ff"; // Apple SF Blue
+        const colorText = "#ffffff";
+        
+        state.activeItems.forEach(item => {
+            const roi = calculateROI(item);
+            if (!roi) return;
+            
+            const [x, y, w, h] = roi;
+            
+            // 極細1px枠線の描画
+            ctx.strokeStyle = colorActive;
+            ctx.lineWidth = 1;
+            ctx.strokeRect(x, y, w, h);
+            
+            // 略称英語テキストの描画
+            const shortLabels = {
+                "総合力": "OVR", "SHO数値": "SHO", "PAS数値": "PAS", "DRB数値": "DRB", "DEF数値": "DEF", "PHY数値": "PHY", "SPD数値": "SPD",
+                "決定力": "Fin", "キック力": "Pow", "冷静さ": "Cmp",
+                "ショートパス": "Pas-S", "ロングパス": "Pas-L", "キック精度": "Acc",
+                "突破力": "Pen", "キープ力": "Kee", "ボールタッチ": "Tch",
+                "タックル": "Tcl", "パスカット": "Int", "マーク": "Mrk",
+                "セービング": "Sav", "反応速度": "Rct", "1対1": "1v1",
+                "ジャンプ": "Jmp", "コンタクト": "Cnt", "スタミナ": "Sta",
+                "走力": "Run", "敏捷性": "Agi"
+            };
+            const lbl = shortLabels[item] || item.slice(0, 3);
+            
+            ctx.font = "bold 11px sans-serif";
+            const textWidth = ctx.measureText(lbl).width;
+            
+            // ラベル背景の深色グレープレート
+            ctx.fillStyle = "#1c1c1e";
+            ctx.fillRect(x, y - 18, textWidth + 8, 18);
+            
+            // テキスト描画
+            ctx.fillStyle = colorText;
+            ctx.fillText(lbl, x + 4, y - 5);
+        });
+    }
+
+    // Streamlitからのデータ受信イベントハンドラ
+    window.addEventListener("message", function(event) {
+        const payload = event.data;
+        
+        // Streamlit公式のレンダリングイベント（双方向引数経由の画像および現在アライメント状態の引き渡し）を処理
+        if (payload.type === "streamlit:render") {
+            try {
+                const args = payload.args;
+                if (!args) return;
+
+                // 1. 画像データのロード
+                if (args.image_base64 && bgImage.src !== args.image_base64) {
+                    bgImage.src = args.image_base64;
+                    bgImage.onload = function() {
+                        imageLoaded = true;
+                        redrawHUD();
+                    };
+                }
+
+                // 2. 親から渡された現在のアライメント調整状態の逆同期 (リラン時の表示リセットを完璧に防止)
+                // 【送信済み状態キャッシュによる逆同期フィルター】
+                // もし親から戻ってきた値が、直前に送信した latestState より古い（＝競合によって None でスキップされ古い値が降ってきた）場合は、上書きを完全にバイパス！
+                let stateChanged = false;
+                if (args.is_gk !== undefined && state.isGk !== args.is_gk) {
+                    state.isGk = args.is_gk;
+                    document.getElementById("btnFP").classList.toggle("active", !state.isGk);
+                    document.getElementById("btnGK").classList.toggle("active", state.isGk);
+                    stateChanged = true;
+                }
+                
+                // 全体Xスケール逆同期フィルター
+                if (args.global_scale_x !== undefined) {
+                    const isOld = lastSentState && args.global_scale_x !== lastSentState.g_s_x;
+                    if (!isOld && state.g_s_x !== args.global_scale_x) {
+                        state.g_s_x = args.global_scale_x;
+                        document.getElementById("sld_g_s_x").value = state.g_s_x;
+                        document.getElementById("val_g_s_x").innerText = `${state.g_s_x.toFixed(2)} x`;
+                        stateChanged = true;
+                    }
+                }
+                // 全体Yスケール逆同期フィルター
+                if (args.global_scale_y !== undefined) {
+                    const isOld = lastSentState && args.global_scale_y !== lastSentState.g_s_y;
+                    if (!isOld && state.g_s_y !== args.global_scale_y) {
+                        state.g_s_y = args.global_scale_y;
+                        document.getElementById("sld_g_s_y").value = state.g_s_y;
+                        document.getElementById("val_g_s_y").innerText = `${state.g_s_y.toFixed(2)} x`;
+                        stateChanged = true;
+                    }
+                }
+                // 全体オフセット逆同期フィルター
+                if (args.global_offset && args.global_offset.length >= 2) {
+                    const valX = args.global_offset[0];
+                    const valY = args.global_offset[1];
+                    const isOld = lastSentState && (valX !== lastSentState.g_x || valY !== lastSentState.g_y);
+                    if (!isOld && (state.g_x !== valX || state.g_y !== valY)) {
+                        state.g_x = valX;
+                        state.g_y = valY;
+                        document.getElementById("sld_g_x").value = state.g_x;
+                        document.getElementById("sld_g_y").value = state.g_y;
+                        document.getElementById("val_g_x").innerText = `${state.g_x} px`;
+                        document.getElementById("val_g_y").innerText = `${state.g_y} px`;
+                        stateChanged = true;
+                    }
+                }
+
+                // グループ・個別パラメータの逆同期 (ディープコピーを適用し、スライダーがある有効キーのみで厳密にスマート差分チェックをして無限再生成ループを完全封殺！)
+                let groupChanged = false;
+                if (args.group_offsets) {
+                    const grpOffCopy = JSON.parse(JSON.stringify(args.group_offsets));
+                    let hasDiff = false;
+                    for (const grp of Object.keys(GROUPS)) {
+                        // 【逆同期フィルター】
+                        const isOld = lastSentState && lastSentState.group_offsets[grp] && 
+                            (grpOffCopy[grp][0] !== lastSentState.group_offsets[grp][0] || 
+                             grpOffCopy[grp][1] !== lastSentState.group_offsets[grp][1]);
+                             
+                        if (!isOld) {
+                            if (!state.group_offsets[grp] || 
+                                state.group_offsets[grp][0] !== grpOffCopy[grp][0] ||
+                                state.group_offsets[grp][1] !== grpOffCopy[grp][1]) {
+                                hasDiff = true;
+                                break;
+                            }
+                        }
+                    }
+                    if (hasDiff) {
+                        state.group_offsets = grpOffCopy;
+                        groupChanged = true;
+                    }
+                }
+                if (args.group_scales) {
+                    const grpSclCopy = JSON.parse(JSON.stringify(args.group_scales));
+                    let hasDiff = false;
+                    for (const grp of Object.keys(GROUPS)) {
+                        const isOld = lastSentState && lastSentState.group_scales[grp] && 
+                            (grpSclCopy[grp][0] !== lastSentState.group_scales[grp][0] || 
+                             grpSclCopy[grp][1] !== lastSentState.group_scales[grp][1]);
+                             
+                        if (!isOld) {
+                            if (!state.group_scales[grp] || 
+                                state.group_scales[grp][0] !== grpSclCopy[grp][0] ||
+                                state.group_scales[grp][1] !== grpSclCopy[grp][1]) {
+                                hasDiff = true;
+                                break;
+                            }
+                        }
+                    }
+                    if (hasDiff) {
+                        state.group_scales = grpSclCopy;
+                        groupChanged = true;
+                    }
+                }
+                
+                let indivChanged = false;
+                if (args.individual_offsets) {
+                    const indOffCopy = JSON.parse(JSON.stringify(args.individual_offsets));
+                    let hasDiff = false;
+                    for (const item of state.activeItems) {
+                        const isOld = lastSentState && lastSentState.individual_offsets[item] && 
+                            (indOffCopy[item][0] !== lastSentState.individual_offsets[item][0] || 
+                             indOffCopy[item][1] !== lastSentState.individual_offsets[item][1]);
+                             
+                        if (!isOld) {
+                            if (!state.individual_offsets[item] || 
+                                state.individual_offsets[item][0] !== indOffCopy[item][0] ||
+                                state.individual_offsets[item][1] !== indOffCopy[item][1]) {
+                                hasDiff = true;
+                                break;
+                            }
+                        }
+                    }
+                    if (hasDiff) {
+                        state.individual_offsets = indOffCopy;
+                        indivChanged = true;
+                    }
+                }
+                if (args.individual_scales) {
+                    const indSclCopy = JSON.parse(JSON.stringify(args.individual_scales));
+                    let hasDiff = false;
+                    for (const item of state.activeItems) {
+                        const isOld = lastSentState && lastSentState.individual_scales[item] && 
+                            (indSclCopy[item][0] !== lastSentState.individual_scales[item][0] || 
+                             indSclCopy[item][1] !== lastSentState.individual_scales[item][1]);
+                             
+                        if (!isOld) {
+                            if (!state.individual_scales[item] || 
+                                state.individual_scales[item][0] !== indSclCopy[item][0] ||
+                                state.individual_scales[item][1] !== indSclCopy[item][1]) {
+                                hasDiff = true;
+                                break;
+                            }
+                        }
+                    }
+                    if (hasDiff) {
+                        state.individual_scales = indSclCopy;
+                        indivChanged = true;
+                    }
+                }
+
+                // 状態変更があった場合、または初回ロード時にUIコンポーネントを再描画
+                if (stateChanged || groupChanged || indivChanged || !imageLoaded) {
+                    if (stateChanged || indivChanged || !imageLoaded) {
+                        setupItemsGrid();
+                    }
+                    if (stateChanged || groupChanged || !imageLoaded) {
+                        setupGroupSliders();
+                    }
+                }
+                redrawHUD();
+            } catch (err) {
+                console.error("[PasteHUD] Safety guard caught render error:", err);
+            }
+        }
+        // 後方互換性のための個別postMessageハンドラ
+        else if (payload.type === "init_image") {
+            if (payload.image_base64 && bgImage.src !== payload.image_base64) {
+                bgImage.src = payload.image_base64;
+                bgImage.onload = function() {
+                    imageLoaded = true;
+                    redrawHUD();
+                };
+            }
+        }
+    });
+
+    // 初期化処理
+    setupItemsGrid();
+    setupGroupSliders();
+    
+    // イベントリスナーの動的割り当て
+    document.querySelectorAll(".apple-slider").forEach(sld => {
+        sld.addEventListener("change", notifyStateChange);
+    });
+
+    // ロードと同時に親フレームと接続シーケンスを開始
+    initializeConnection();
+</script>
+
+</body>
+</html>

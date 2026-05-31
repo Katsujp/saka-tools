@@ -1,68 +1,106 @@
 <!DOCTYPE html>
-<html>
+<html lang="ja">
 <head>
     <meta charset="utf-8">
     <title>Streamlit Paste Bridge Component</title>
     <style>
+        :root {
+            --bg-color: #1c1c1e;
+            --bg-hover: #2c2c2e;
+            --accent-color: #0a84ff; /* SF Pro Blue */
+            --border-color: #3a3a3c;
+            --text-color: #ffffff;
+            --text-secondary: #8e8e93;
+            --font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "Helvetica Neue", Helvetica, Arial, sans-serif;
+        }
+
         body {
             margin: 0;
             padding: 0;
             overflow: hidden;
             background-color: transparent;
+            font-family: var(--font-family);
         }
+
         #paste-box {
-            border: 3px dashed #e2e8f0;
-            border-radius: 12px;
-            padding: 25px 20px;
+            border: 1px dashed var(--border-color);
+            border-radius: 8px;
+            padding: 24px 20px;
             text-align: center;
-            background-color: #1a202c;
-            color: #a0aec0;
+            background-color: var(--bg-color);
+            color: var(--text-secondary);
             cursor: not-allowed;
-            font-family: 'Outfit', 'Inter', sans-serif;
-            font-weight: bold;
             outline: none;
             box-sizing: border-box;
             width: 100%;
-            height: 140px;
-            transition: all 0.3s ease;
+            height: 120px;
+            transition: all 0.2s cubic-bezier(0.25, 0.8, 0.25, 1);
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
         }
+
         #paste-box.ready {
-            border-color: #00ffaa;
-            color: #00ffaa;
+            border-color: var(--border-color);
             cursor: pointer;
         }
+
         #paste-box.ready:hover {
-            background-color: #2d3748;
+            background-color: var(--bg-hover);
+            border-color: var(--text-secondary);
         }
+
         #paste-box.ready:focus {
-            box-shadow: 0 0 10px #00ffaa;
+            border-color: var(--accent-color);
+            box-shadow: 0 0 0 1px var(--accent-color);
         }
-        #status-indicator {
+
+        #paste-box.dragover {
+            background-color: var(--bg-hover) !important;
+            border-color: var(--accent-color) !important;
+            border-style: solid !important;
+        }
+
+        .title {
+            font-size: 14px;
+            font-weight: 600;
+            color: var(--text-color);
+            margin-bottom: 4px;
+        }
+
+        .subtitle {
             font-size: 11px;
-            margin-top: 6px;
-            color: #e53e3e;
-            font-weight: normal;
-            transition: color 0.3s ease;
+            color: var(--text-secondary);
         }
+
+        #status-indicator {
+            font-size: 10px;
+            margin-top: 8px;
+            color: #ff453a; /* Apple System Red */
+            font-weight: 500;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
         #status-indicator.ready {
-            color: #38a169;
+            color: #30d158; /* Apple System Green */
         }
     </style>
 </head>
 <body>
     <div id="paste-box" tabindex="0">
-        <span style="font-size: 20px; display: block; margin-bottom: 8px;">⏳ 初期化中...</span>
-        <span style="font-size: 12px; font-weight: normal;">接続をお待ちください</span>
-        <div id="status-indicator">🔴 未接続 (Streamlitの起動を待っています)</div>
+        <div class="title">Initializing connection</div>
+        <div class="subtitle">Please wait for establishing communication...</div>
+        <div id="status-indicator">Disconnected</div>
     </div>
 
     <script>
-        console.log("[PasteBridge] ロードされました。接続処理を開始します。");
+        console.log("[PasteBridge] Loading PasteBridge. Initializing...");
 
         const pasteBox = document.getElementById('paste-box');
         let isReady = false;
 
-        // Streamlit親フレームにメッセージを送信するヘルパー関数
         function sendMessageToStreamlit(type, payload = {}) {
             window.parent.postMessage(Object.assign({
                 isStreamlitMessage: true,
@@ -70,32 +108,24 @@
             }, payload), "*");
         }
 
-        // 1. ロード完了時に親へ componentReady シグナルを送信（超重要ライフサイクル）
         function initializeConnection() {
-            console.log("[PasteBridge] Streamlit親フレームに componentReady を送信中...");
             sendMessageToStreamlit("streamlit:componentReady", { apiVersion: 1 });
         }
 
-        // 2. 親フレームからのメッセージ（render）を待ち受けてアクティブ化する
         window.addEventListener("message", (event) => {
             if (event && event.data && event.data.type === "streamlit:render") {
-                console.log("[PasteBridge] Streamlit親フレームから render シグナルを受信しました！接続が確立されました。");
-                
                 if (!isReady) {
                     isReady = true;
                     
-                    // UI表示を「アクティブ」へ更新
+                    // UIをApple Proミニマリズム仕様でアクティブ化
                     pasteBox.className = "ready";
                     pasteBox.innerHTML = `
-                        <span style="font-size: 20px; display: block; margin-bottom: 8px;">📋 ここをクリックして Ctrl + V で貼り付け</span>
-                        <span style="font-size: 12px; color: #a0aec0; font-weight: normal;">（または画像ファイルをここに直接ドラッグ＆ドロップ）</span>
-                        <div id="status-indicator" class="ready">🟢 接続完了 (貼り付け可能)</div>
+                        <div class="title">Click here and press Ctrl + V to paste image</div>
+                        <div class="subtitle">Or drag and drop the image file directly here</div>
+                        <div id="status-indicator" class="ready">Ready to paste</div>
                     `;
                     
-                    // 高さを親に通知
-                    sendMessageToStreamlit("streamlit:setFrameHeight", { height: 140 });
-                    
-                    // イベントリスナーのアタッチ
+                    sendMessageToStreamlit("streamlit:setFrameHeight", { height: 120 });
                     attachEvents();
                 }
             }
@@ -104,99 +134,76 @@
         function attachEvents() {
             const activePasteBox = document.getElementById('paste-box');
             
-            // フォーカス時にスタイルとコンソールログで追跡可能にする
             activePasteBox.addEventListener('click', () => {
                 activePasteBox.focus();
-                console.log("[PasteBridge] ペーストボックスがフォーカスされました。貼り付けを受け付けます。");
             });
             
-            // ドラッグ＆ドロップハンドラ
             activePasteBox.addEventListener('dragover', (e) => {
                 e.preventDefault();
                 if (isReady) {
-                    activePasteBox.style.borderColor = '#00cc88';
-                    activePasteBox.style.backgroundColor = '#2d3748';
+                    activePasteBox.classList.add('dragover');
                 }
             });
             
             activePasteBox.addEventListener('dragleave', () => {
                 if (isReady) {
-                    activePasteBox.style.borderColor = '#00ffaa';
-                    activePasteBox.style.backgroundColor = '#1a202c';
+                    activePasteBox.classList.remove('dragover');
                 }
             });
             
             activePasteBox.addEventListener('drop', (e) => {
                 e.preventDefault();
                 if (!isReady) return;
-                activePasteBox.style.borderColor = '#00ffaa';
-                activePasteBox.style.backgroundColor = '#1a202c';
+                activePasteBox.classList.remove('dragover');
                 if (e.dataTransfer.files.length > 0) {
-                    console.log("[PasteBridge] ファイルがドロップされました:", e.dataTransfer.files[0].name);
                     handleFile(e.dataTransfer.files[0]);
                 }
             });
 
-            // クリップボード貼り付け（Ctrl+V）ハンドラ
             activePasteBox.addEventListener('paste', (e) => {
                 if (!isReady) return;
-                console.log("[PasteBridge] ペーストイベントが発生しました。クリップボード解析中...");
                 const items = (e.clipboardData || window.clipboardData).items;
                 let imageFound = false;
                 
                 for (let item of items) {
                     if (item.kind === 'file' && item.type.startsWith('image/')) {
                         const file = item.getAsFile();
-                        console.log("[PasteBridge] 画像データを検出:", file.type);
                         handleFile(file);
                         e.preventDefault();
                         imageFound = true;
                         break;
                     }
                 }
-                
-                if (!imageFound) {
-                    console.warn("[PasteBridge] クリップボード内に画像データが見つかりません。");
-                }
             });
         }
 
-        // 画像ファイルをBase64エンコードし親へ転送
         function handleFile(file) {
             const reader = new FileReader();
             reader.onload = function(event) {
                 const base64Data = event.target.result;
-                console.log("[PasteBridge] 画像のBase64デコード成功。親プロセスへ転送します。データ長:", base64Data.length);
-                
-                // 親フレームにデータを送信
                 sendMessageToStreamlit("streamlit:setComponentValue", { value: base64Data });
                 
                 const activePasteBox = document.getElementById('paste-box');
                 activePasteBox.innerHTML = `
-                    <span style="font-size: 20px; display: block; margin-bottom: 8px; color: #00ffaa;">✅ 読み込み完了！</span>
-                    <span style="font-size: 12px; color: #a0aec0;">データを正常に転送しました。</span>
-                    <div id="status-indicator" class="ready">🟢 接続完了 (貼り付け可能)</div>
+                    <div class="title" style="color: #30d158;">Successfully loaded</div>
+                    <div class="subtitle">Image has been transferred to reader system</div>
+                    <div id="status-indicator" class="ready">Ready to paste</div>
                 `;
                 
                 setTimeout(() => {
                     if (isReady) {
                         activePasteBox.innerHTML = `
-                            <span style="font-size: 20px; display: block; margin-bottom: 8px;">📋 ここをクリックして Ctrl + V で貼り付け</span>
-                            <span style="font-size: 12px; color: #a0aec0; font-weight: normal;">（または画像ファイルをここに直接ドラッグ＆ドロップ）</span>
-                            <div id="status-indicator" class="ready">🟢 接続完了 (貼り付け可能)</div>
+                            <div class="title">Click here and press Ctrl + V to paste image</div>
+                            <div class="subtitle">Or drag and drop the image file directly here</div>
+                            <div id="status-indicator" class="ready">Ready to paste</div>
                         `;
                     }
                 }, 2000);
             };
             
-            reader.onerror = function(err) {
-                console.error("[PasteBridge] FileReaderエラー:", err);
-            };
-            
             reader.readAsDataURL(file);
         }
 
-        // ロード時に初期疎通を開始
         initializeConnection();
     </script>
 </body>

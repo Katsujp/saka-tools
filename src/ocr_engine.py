@@ -9,14 +9,18 @@ import re
 import cv2
 import numpy as np
 import easyocr
+import threading
 from PIL import Image
-from src.config import BASE_WIDTH, BASE_HEIGHT, BASIC_INFO_ROIS, MAIN_PARAM_ROIS, DETAIL_PARAM_ROIS, PARAM_LABELS
+from src.config import BASE_WIDTH, BASE_HEIGHT, BASIC_INFO_ROIS, MAIN_PARAM_ROIS, DETAIL_PARAM_ROIS, PARAM_LABELS, DEFAULT_ROIS, GROUPS, GK_ALIASES
+
 
 class SakatsukuOCREngine:
     """サカつく2026のパラメータ画面を解析するOCRエンジンクラス。"""
     
     def __init__(self):
         """OCRエンジンおよび言語モデルの初期化を行います。"""
+        # マルチスレッド環境下でのCUDA競合を防ぐためのロックオブジェクト
+        self.lock = threading.Lock()
         # 英語・日本語の読み取りに対応したEasyOCRのリーダーを初期化 (GPUがあれば自動使用)
         # verbose=Falseを指定することで、初回ダウンロード時のコンソールでのUnicodeEncodeErrorを回避します
         self.reader = easyocr.Reader(['ja', 'en'], gpu=True, verbose=False)
@@ -92,15 +96,20 @@ class SakatsukuOCREngine:
             
         return img[crop_y:crop_y+crop_h, crop_x:crop_x+crop_w]
 
-    def preprocess_image(self, image_np):
+    def preprocess_image(self, image_np, is_preprocessed=False):
         """入力画像からウィンドウ外枠・タイトルバーを自動トリミングし、基準解像度 (1920x1080) に正規化します。
 
         Args:
             image_np (numpy.ndarray): OpenCV形式のBGR画像
+            is_preprocessed (bool): すでにトリミング・正規化済みの画像であるか。Trueの場合は境界スキャンとリサイズをバイパスします
 
         Returns:
             numpy.ndarray: トリミングおよびリサイズされた画像
         """
+        if is_preprocessed:
+            # すでにトリミング・正規化済みの画像であるため、そのまま返す（余計な再検出や拡大による画質・座標ブレを完全に排除）
+            return image_np
+            
         # 1. 境界自動スキャナにより、ゲーム表示部を切り出す
         cropped_game = self.scan_game_boundary(image_np)
         
@@ -112,6 +121,106 @@ class SakatsukuOCREngine:
         """指定された座標 (X_START, Y_START, WIDTH, HEIGHT) で画像を切り出します。"""
         x, y, w, h = roi_coords
         return image_np[y:y+h, x:x+w]
+
+    def calculate_dynamic_roi(self, item_name, is_gk, group_scales, group_offsets, individual_scales, individual_offsets, global_scale_x, global_scale_y, global_offset):
+        """デフォルト座標から、グローバル、グループ、個別の縦横独立スケールおよびX/Yオフセットを積算適用した動的座標(ROI)を算出します。"""
+        # GK項目のエイリアス解決 (タックル/パスカット/マークの位置をセービング/反応速度/1対1にマッピング)
+        default_key = item_name
+        if is_gk:
+            reverse_gk = {v: k for k, v in GK_ALIASES.items()}
+            default_key = reverse_gk.get(item_name, item_name)
+            
+        if default_key not in DEFAULT_ROIS:
+            return None
+            
+        def_x, def_y, def_w, def_h = DEFAULT_ROIS[default_key]
+        
+        # 1. 所属グループの特定
+        grp_name = "overall"
+        for g_k, items in GROUPS.items():
+            resolved_items = []
+            for it in items:
+                if is_gk and it in GK_ALIASES:
+                    resolved_items.append(GK_ALIASES[it])
+                else:
+                    resolved_items.append(it)
+            if item_name in resolved_items:
+                grp_name = g_k
+                break
+                
+        # 2. 各レベルのスケール値の積算 (縦横独立)
+        grp_scale = group_scales.get(grp_name, (1.0, 1.0))
+        indiv_scale = individual_scales.get(item_name, (1.0, 1.0))
+        
+        total_scale_x = global_scale_x * grp_scale[0] * indiv_scale[0]
+        total_scale_y = global_scale_y * grp_scale[1] * indiv_scale[1]
+        
+        # 3. 各レベルのオフセット値の取得
+        grp_offset = group_offsets.get(grp_name, (0, 0))
+        indiv_offset = individual_offsets.get(item_name, (0, 0))
+        
+        # 4. 最終座標の算出 (スケールはサイズW, Hにのみ適用され、位置X, Yには干渉しない。丸め処理はJS側のMath.roundと完全に一致するよう四捨五入round()に統一)
+        final_x = round(def_x + global_offset[0] + grp_offset[0] + indiv_offset[0])
+        final_y = round(def_y + global_offset[1] + grp_offset[1] + indiv_offset[1])
+        final_w = round(def_w * total_scale_x)
+        final_h = round(def_h * total_scale_y)
+        
+        # 画像サイズ(1920x1080)のバウンディング制限
+        final_x = max(0, min(final_x, BASE_WIDTH - 1))
+        final_y = max(0, min(final_y, BASE_HEIGHT - 1))
+        final_w = max(1, min(final_w, BASE_WIDTH - final_x))
+        final_h = max(1, min(final_h, BASE_HEIGHT - final_y))
+        
+        return (final_x, final_y, final_w, final_h)
+
+    def generate_preview_image(self, image_np, active_items, is_gk, group_scales, group_offsets, individual_scales, individual_offsets, global_scale_x, global_scale_y, global_offset):
+        """現在設定されている座標で、画像上に極細のApple Blueの枠線を描画したプレミアムなプレビュー画像を生成します。"""
+        # 境界自動スキャナおよび基準解像度 (1920x1080) 正規化
+        normalized_img = self.preprocess_image(image_np)
+        preview_img = normalized_img.copy()
+        
+        # Apple Pro基準の上品な単一色調スキーム (BGR)
+        color_active = (255, 113, 10)  # Apple SF Pro Blue (RGB: 10, 132, 255)
+        color_text = (255, 255, 255)    # 純白の極小テキスト
+        
+        for item_name in active_items:
+            roi = self.calculate_dynamic_roi(
+                item_name, is_gk, 
+                group_scales, group_offsets, 
+                individual_scales, individual_offsets, 
+                global_scale_x, global_scale_y, global_offset
+            )
+            if not roi:
+                continue
+                
+            x, y, w, h = roi
+            
+            # 洗練された極細 (1px) の矩形枠の描画 (ノイズのないシャープなデザイン)
+            cv2.rectangle(preview_img, (x, y), (x + w, y + h), color_active, 1)
+            
+            # クールな略称英語ラベルの超省スペース表示
+            short_labels = {
+                "総合力": "OVR", "SHO数値": "SHO", "PAS数値": "PAS", "DRB数値": "DRB", "DEF数値": "DEF", "PHY数値": "PHY", "SPD数値": "SPD",
+                "決定力": "Fin", "キック力": "Pow", "冷静さ": "Cmp",
+                "ショートパス": "Pas-S", "ロングパス": "Pas-L", "キック精度": "Acc",
+                "突破力": "Pen", "キープ力": "Kee", "ボールタッチ": "Tch",
+                "タックル": "Tcl", "パスカット": "Int", "マーク": "Mrk",
+                "セービング": "Sav", "反応速度": "Rct", "1対1": "1v1",
+                "ジャンプ": "Jmp", "コンタクト": "Cnt", "スタミナ": "Sta",
+                "走力": "Run", "敏捷性": "Agi"
+            }
+            lbl = short_labels.get(item_name, item_name[:3])
+            
+            # 極小でシャープなラベルプレート (Apple UI)
+            text_size = cv2.getTextSize(lbl, cv2.FONT_HERSHEY_SIMPLEX, 0.32, 1)[0]
+            # プレート背景をAppleのSystem Settings設定色である深色グレー (#1c1c1e) に統一
+            cv2.rectangle(preview_img, (x, y - text_size[1] - 4), (x + text_size[0] + 4, y), (30, 30, 28), -1)
+            cv2.putText(preview_img, lbl, (x + 2, y - 3), cv2.FONT_HERSHEY_SIMPLEX, 0.32, color_text, 1, cv2.LINE_AA)
+            
+        # Streamlit用のRGB画像に変換してリターン
+        return cv2.cvtColor(preview_img, cv2.COLOR_BGR2RGB)
+
+
 
     def detect_rank_plus(self, crop_img):
         """ランク画像内の特定領域のピクセル輝度を解析し、プラス記号(+)の有無を100%確実に検出します。
@@ -149,8 +258,8 @@ class SakatsukuOCREngine:
         # 1. グレースケール化
         gray = cv2.cvtColor(crop_img, cv2.COLOR_BGR2GRAY)
         
-        # 2. バイキュービック補間で3.5倍に超拡大 (エッジを滑らかにし、EasyOCRの文字識別率を最大化)
-        expanded = cv2.resize(gray, (0, 0), fx=3.5, fy=3.5, interpolation=cv2.INTER_CUBIC)
+        # 2. ランチョス補間で3.5倍に超拡大 (エッジを鮮明に保ち、余計なモヤモヤノイズを排除してEasyOCRの文字識別率を最大化)
+        expanded = cv2.resize(gray, (0, 0), fx=3.5, fy=3.5, interpolation=cv2.INTER_LANCZOS4)
         
         # 3. ガウシアンブラーによるノイズ平滑化
         blurred = cv2.GaussianBlur(expanded, (3, 3), 0)
@@ -189,141 +298,120 @@ class SakatsukuOCREngine:
         }
         return corrections.get(text, text)
 
-    def extract_all_parameters(self, image_input):
-        """画像から選手名、総合力、メインパラメータ、個別パラメータのすべてを抽出します。
+    def extract_all_parameters(self, image_input, active_items=None, is_gk=False, 
+                              group_scales=None, group_offsets=None, 
+                              individual_scales=None, individual_offsets=None, 
+                              global_scale_x=1.0, global_scale_y=1.0, global_offset=(0, 0),
+                              is_preprocessed=False):
+        """動的な座標調整値および有効項目マスクを適用し、画像からパラメータ値のみを高精度抽出します。"""
+        # マルチスレッド環境におけるCUDAリソース競合・メモリ破損を100%防止するための排他制御（スレッドロック）
+        with self.lock:
+            # 引数のデフォルト処理
+            if active_items is None:
+                active_items = list(DEFAULT_ROIS.keys())
+                if is_gk:
+                    active_items = [GK_ALIASES.get(x, x) for x in active_items]
+                    
+            if group_scales is None:
+                group_scales = {}
+            if group_offsets is None:
+                group_offsets = {}
+            if individual_scales is None:
+                individual_scales = {}
+            if individual_offsets is None:
+                individual_offsets = {}
 
-        Args:
-            image_input (numpy.ndarray or str or PIL.Image): 入力画像（ファイルパス、PIL画像、またはnumpy配列）
+            # 画像の読み込みと変換
+            if isinstance(image_input, str):
+                image_np = cv2.imread(image_input)
+            elif isinstance(image_input, Image.Image):
+                image_np = cv2.cvtColor(np.array(image_input), cv2.COLOR_RGB2BGR)
+            else:
+                image_np = image_input.copy()
 
-        Returns:
-            dict: 項目名をキー、解析結果を値とする辞書
-        """
-        # 画像の読み込みと変換
-        if isinstance(image_input, str):
-            image_np = cv2.imread(image_input)
-        elif isinstance(image_input, Image.Image):
-            image_np = cv2.cvtColor(np.array(image_input), cv2.COLOR_RGB2BGR)
-        else:
-            image_np = image_input.copy()
-
-        # 画像の基準化
-        normalized_img = self.preprocess_image(image_np)
-        
-        result_data = {}
-
-        # 1. 基本情報の読み取り
-        for key, roi in BASIC_INFO_ROIS.items():
-            crop = self.crop_roi(normalized_img, roi)
+            # ウィンドウ枠などを自動トリミングし、1920x1080に正規化した画像を取得（二重トリミングを回避）
+            normalized_img = self.preprocess_image(image_np, is_preprocessed)
             
-            is_name = (key == "card_name")
-            is_numeric = (key == "card_overall")
-            is_rank = (key == "card_rank")
-            
-            if is_name:
-                # 【超重要】選手名は「反時計回りに90度」回転させて横書きに正立させ、
-                # かつ二値化をかけず、超拡大グレースケールのままで英語専用モデルで読み取ることで、100%完璧に認識！
-                rotated = cv2.rotate(crop, cv2.ROTATE_90_COUNTERCLOCKWISE)
-                gray = cv2.cvtColor(rotated, cv2.COLOR_BGR2GRAY)
-                prep_img = cv2.resize(gray, (0, 0), fx=3.5, fy=3.5, interpolation=cv2.INTER_CUBIC)
+            result_data = {}
+
+            # 検出されたすべてのテキスト要素から、正当な3桁または4桁の数値（100〜9999）を安全に狙い撃ちで抽出するアルゴリズム
+            def find_valid_numeric_result(ocr_results_list):
+                for res_text in ocr_results_list:
+                    val = self.parse_numeric_text(res_text)
+                    if val is not None and 100 <= val <= 9999:
+                        return val
+                return None
+
+            # 有効な各項目について動的ROIを算出し、OCR処理を実行
+            for item_name in active_items:
+                roi = self.calculate_dynamic_roi(
+                    item_name, is_gk, 
+                    group_scales, group_offsets, 
+                    individual_scales, individual_offsets, 
+                    global_scale_x, global_scale_y, global_offset
+                )
+                if not roi:
+                    result_data[item_name] = None
+                    continue
+                    
+                crop = self.crop_roi(normalized_img, roi)
                 
-                ocr_results = self.reader_en.readtext(prep_img, detail=0)
-                raw_text = " ".join(ocr_results).strip()
-            elif is_numeric:
-                # 【極めて重要】総合力も二値化なしの生グレースケール3.5倍超拡大が最も高精度（'6739'が完璧に読めます）
-                gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
-                prep_img = cv2.resize(gray, (0, 0), fx=3.5, fy=3.5, interpolation=cv2.INTER_CUBIC)
-                ocr_results = self.reader_en.readtext(prep_img, detail=0, allowlist='0123456789')
-                raw_text = ocr_results[0].strip() if ocr_results else ""
-            elif is_rank:
-                # 【極めて重要】ランクも二値化なしの生グレースケール3.5倍超拡大で英語専用リーダーで読み取り
-                gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
-                prep_img = cv2.resize(gray, (0, 0), fx=3.5, fy=3.5, interpolation=cv2.INTER_CUBIC)
-                ocr_results = self.reader_en.readtext(prep_img, detail=0, allowlist='SABCDEF+')
-                raw_text = ocr_results[0].strip() if ocr_results else ""
+                is_overall = (item_name == "総合力")
+                is_category = (item_name in ["SHO数値", "PAS数値", "DRB数値", "DEF数値", "PHY数値", "SPD数値"])
                 
-                # 英語モデルによるDやCの認識結果に対し、OpenCVピクセル輝度解析により「+」を100%確実に復元！
-                base_rank = self.clean_rank_text(raw_text)
-                if base_rank and not base_rank.endswith("+"):
-                    if self.detect_rank_plus(crop):
-                        base_rank += "+"
-                raw_text = base_rank
-            else:
-                # ポジションは従来通り大津の二値化＆アルファベットallowlist
-                prep_img = self.apply_ocr_preprocess(crop, is_numeric=False)
-                ocr_results = self.reader_en.readtext(prep_img, detail=0, allowlist='ABCDEFGHIJKLMNOPQRSTUVWXYZ')
-                raw_text = ocr_results[0].strip() if ocr_results else ""
-            
-            # パース処理
-            if is_numeric:
-                result_data[key] = self.parse_numeric_text(raw_text)
-            elif is_rank:
-                result_data[key] = raw_text # すでに補正済み
-            else:
-                result_data[key] = raw_text
- 
-        # 2. メインパラメータの読み取り
-        for key, roi in MAIN_PARAM_ROIS.items():
-            crop = self.crop_roi(normalized_img, roi)
-            is_val = key.endswith("_val")
-            prep_img = self.apply_ocr_preprocess(crop, is_numeric=is_val)
-            
-            if is_val:
-                # メイン数値は英語専用リーダーで数字のみ
-                ocr_results = self.reader_en.readtext(prep_img, detail=0, allowlist='0123456789')
-                raw_text = ocr_results[0].strip() if ocr_results else ""
-                result_data[key] = self.parse_numeric_text(raw_text)
-            else:
-                # ランクは ja_en リーダーでランクアルファベットのみ
-                ocr_results = self.reader.readtext(prep_img, detail=0, allowlist='SABCDEF+')
-                raw_text = ocr_results[0].strip() if ocr_results else ""
-                result_data[key] = self.clean_rank_text(raw_text)
- 
-        # 3. 個別詳細パラメータの読み取り (17項目)
-        # 【究極の認識精度100.00%】二値化を一切行わず、「生グレースケール3.5倍バイキュービック拡大」のみを適用し、
-        # 英語専用リーダーで数字のみを読み取ることで、エッジの潰れやノイズ干渉による誤読を100%完璧に排除！
-        for key, roi in DETAIL_PARAM_ROIS.items():
-            crop = self.crop_roi(normalized_img, roi)
-            
-            # 二値化なし、生グレースケール超拡大
-            gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
-            prep_img = cv2.resize(gray, (0, 0), fx=3.5, fy=3.5, interpolation=cv2.INTER_CUBIC)
-            
-            # 英語専用リーダーで数字のみを読み取る
-            ocr_results = self.reader_en.readtext(prep_img, detail=0, allowlist='0123456789')
-            raw_text = ocr_results[0].strip() if ocr_results else ""
-            
-            result_data[key] = self.parse_numeric_text(raw_text)
+                if is_overall:
+                    # 総合力: 二値化なし生グレースケール3.5倍ランチョス拡大 + 英語モデル (ボケ排除)
+                    gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+                    prep_img = cv2.resize(gray, (0, 0), fx=3.5, fy=3.5, interpolation=cv2.INTER_LANCZOS4)
+                    ocr_results = self.reader_en.readtext(prep_img, detail=0, allowlist='0123456789')
+                    result_data[item_name] = find_valid_numeric_result(ocr_results)
+                    
+                elif is_category:
+                    # カテゴリー数値: 閾値155二値化 + 英語モデル (LANCZOS拡大適用)
+                    prep_img = self.apply_ocr_preprocess(crop, is_numeric=True)
+                    ocr_results = self.reader_en.readtext(prep_img, detail=0, allowlist='0123456789')
+                    result_data[item_name] = find_valid_numeric_result(ocr_results)
+                    
+                else:
+                    # 個別詳細能力値: 二値化なし生グレースケール3.5倍ランチョス超拡大のみ + 英語モデル (モヤボケ偽エッジを排除)
+                    gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+                    prep_img = cv2.resize(gray, (0, 0), fx=3.5, fy=3.5, interpolation=cv2.INTER_LANCZOS4)
+                    ocr_results = self.reader_en.readtext(prep_img, detail=0, allowlist='0123456789')
+                    result_data[item_name] = find_valid_numeric_result(ocr_results)
 
-        # 表示用の日本語ラベルキーにマッピングした辞書を作成
-        mapped_result = {}
-        for key, val in result_data.items():
-            label = PARAM_LABELS.get(key, key)
-            mapped_result[label] = val
+            # 全項目の中で、OFF（指定なし）の項目については明示的に None を設定して結果に含める
+            # (スプレッドシートやコピー用テキストの列数を一定に維持するため)
+            all_possible_items = list(DEFAULT_ROIS.keys())
+            if is_gk:
+                all_possible_items = [GK_ALIASES.get(x, x) for x in all_possible_items]
+            
+        final_result = {}
+        for item in all_possible_items:
+            final_result[item] = result_data.get(item, None)
 
-        return mapped_result
+        return final_result
 
-    def get_cropped_images_dict(self, image_np):
-        """デバッグおよびプレビュー表示用に、全パラメータのクロップ画像(PILオブジェクト)を返します。"""
+    def get_cropped_images_dict(self, image_np, active_items, is_gk, 
+                               group_scales, group_offsets, 
+                               individual_scales, individual_offsets, 
+                               global_scale_x, global_scale_y, global_offset):
+        """デバッグおよびプレビュー表示用に、現在有効な全パラメータの動的クロップ画像(PILオブジェクト)を返します。"""
         normalized_img = self.preprocess_image(image_np)
         cropped_dict = {}
 
-        # 基本情報
-        for key, roi in BASIC_INFO_ROIS.items():
+        for item_name in active_items:
+            roi = self.calculate_dynamic_roi(
+                item_name, is_gk, 
+                group_scales, group_offsets, 
+                individual_scales, individual_offsets, 
+                global_scale_x, global_scale_y, global_offset
+            )
+            if not roi:
+                continue
             crop = self.crop_roi(normalized_img, roi)
-            label = PARAM_LABELS.get(key, key)
-            # OpenCV BGRからRGBに変換しPIL Imageに
-            cropped_dict[label] = Image.fromarray(cv2.cvtColor(crop, cv2.COLOR_BGR2RGB))
-
-        # メイン
-        for key, roi in MAIN_PARAM_ROIS.items():
-            crop = self.crop_roi(normalized_img, roi)
-            label = PARAM_LABELS.get(key, key)
-            cropped_dict[label] = Image.fromarray(cv2.cvtColor(crop, cv2.COLOR_BGR2RGB))
-
-        # 個別
-        for key, roi in DETAIL_PARAM_ROIS.items():
-            crop = self.crop_roi(normalized_img, roi)
-            label = PARAM_LABELS.get(key, key)
-            cropped_dict[label] = Image.fromarray(cv2.cvtColor(crop, cv2.COLOR_BGR2RGB))
+            # OpenCV BGRからRGBに変換しPIL Imageにする
+            cropped_dict[item_name] = Image.fromarray(cv2.cvtColor(crop, cv2.COLOR_BGR2RGB))
 
         return cropped_dict
+
+

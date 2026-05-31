@@ -1,8 +1,9 @@
 # -*- coding: utf-8 -*-
 """サカつく2026 パラメーター自動OCRリーダー Streamlit アプリケーション。
 
-画像のアップロード、クリップボードペースト、高精度OCR解析、データの編集・確認、
-Googleスプレッドシートへの直接書き込み、およびローカルExcel/CSVダウンロード機能を提供します。
+画像のアップロード、クリップボードペースト、高精度な動的座標調整（案A・案B）、
+FP/GKロール切り替え、縦横展開対応コピペステーション、Googleスプレッドシート書き込み、
+およびローカルExcelダウンロード機能を提供します。
 """
 
 # =====================================================================
@@ -12,7 +13,7 @@ import sys
 import ctypes
 
 try:
-    # OSによるスケーリング介入を無効化し、Per-Monitor DPI Awareに設定して画像のボケを防止します
+    # OSによるスケーリング介入を無効化し、Per-Monitor DPI Awareに設定して画像のボケを防止
     ctypes.windll.shcore.SetProcessDpiAwareness(2) # PROCESS_PER_MONITOR_DPI_AWARE
 except Exception:
     try:
@@ -24,7 +25,6 @@ import ssl
 import urllib.request
 
 # 1. すべての標準出力における cp932 エンコードエラーによるクラッシュを防止
-# (表現できない文字を自動で '?' に置換して安全にスルーさせます)
 if hasattr(sys.stdout, 'reconfigure'):
     sys.stdout.reconfigure(errors='replace')
 if hasattr(sys.stderr, 'reconfigure'):
@@ -33,7 +33,6 @@ if hasattr(sys.stderr, 'reconfigure'):
 # 2. EasyOCRのダウンロード進捗バー(\u2588)を強制的に無効化
 original_urlretrieve = urllib.request.urlretrieve
 def patched_urlretrieve(url, filename=None, reporthook=None, data=None):
-    # progress_hook コールバックを None にして本来の処理に委譲
     return original_urlretrieve(url, filename, reporthook=None, data=data)
 urllib.request.urlretrieve = patched_urlretrieve
 
@@ -43,101 +42,19 @@ ssl._create_default_https_context = ssl._create_unverified_context
 
 import json
 import os
+import time
 import io
-import ctypes
+import base64
 import pandas as pd
 import streamlit as st
 import numpy as np
-from PIL import Image, ImageGrab
+from PIL import Image
 import cv2
-
-def get_high_res_clipboard_image():
-    """Windows APIを直接呼び出し、クリップボードから無劣化・最高解像度の画像を取得します。
-    ファイルコピー(CF_HDROP)、PNG生データ、DIBv5、DIBの順で最良のフォーマットを優先抽出します。
-    """
-    CF_HDROP = 15
-    CF_DIB = 8
-    CF_DIBV5 = 17
-    
-    # 登録されたカスタムフォーマット名 "PNG" のフォーマットIDを取得
-    PNG_FORMAT = ctypes.windll.user32.RegisterClipboardFormatW("PNG")
-    
-    if not ctypes.windll.user32.OpenClipboard(None):
-        return None
-        
-    try:
-        # ---- 優先度1: CF_HDROP (ファイルコピー) の確認 ----
-        # エクスプローラ等でファイルをコピーした場合、ファイルパスのリストを取得
-        handle = ctypes.windll.user32.GetClipboardData(CF_HDROP)
-        if handle:
-            class DROPFILES(ctypes.Structure):
-                _fields_ = [
-                    ("pFiles", ctypes.c_uint32),
-                    ("pt", ctypes.c_long * 2),
-                    ("fNC", ctypes.c_int),
-                    ("fWide", ctypes.c_int)
-                ]
-            lock = ctypes.windll.kernel32.GlobalLock(handle)
-            size = ctypes.windll.kernel32.GlobalSize(handle)
-            df = DROPFILES.from_buffer_copy(ctypes.string_at(lock, ctypes.sizeof(DROPFILES)))
-            
-            paths = []
-            if df.pFiles:
-                offset = df.pFiles
-                raw_bytes = ctypes.string_at(lock + offset, size - offset)
-                paths_str = raw_bytes.decode('utf-16-le' if df.fWide else 'utf-8')
-                paths = [p for p in paths_str.split('\x00') if p]
-            ctypes.windll.kernel32.GlobalUnlock(handle)
-            
-            # 有効なファイルパスが存在すれば、パスのリストを返す
-            if paths:
-                return paths
-
-        # ---- 優先度2: 生のPNGデータとして抽出 ----
-        handle = ctypes.windll.user32.GetClipboardData(PNG_FORMAT)
-        if handle:
-            lock = ctypes.windll.kernel32.GlobalLock(handle)
-            size = ctypes.windll.kernel32.GlobalSize(handle)
-            raw_data = ctypes.string_at(lock, size)
-            ctypes.windll.kernel32.GlobalUnlock(handle)
-            return Image.open(io.BytesIO(raw_data)).copy()
-            
-        # ---- 優先度3: DIBV5 (DIBバージョン5) として抽出 ----
-        handle = ctypes.windll.user32.GetClipboardData(CF_DIBV5)
-        if handle:
-            lock = ctypes.windll.kernel32.GlobalLock(handle)
-            size = ctypes.windll.kernel32.GlobalSize(handle)
-            raw_data = ctypes.string_at(lock, size)
-            ctypes.windll.kernel32.GlobalUnlock(handle)
-            
-            dib_header_size = int.from_bytes(raw_data[0:4], 'little')
-            offset = 14 + dib_header_size
-            bmp_header = b'BM' + (14 + size).to_bytes(4, 'little') + b'\x00\x00\x00\x00' + offset.to_bytes(4, 'little')
-            return Image.open(io.BytesIO(bmp_header + raw_data)).copy()
-
-        # ---- 優先度4: CF_DIB (標準DIB) として抽出 ----
-        handle = ctypes.windll.user32.GetClipboardData(CF_DIB)
-        if handle:
-            lock = ctypes.windll.kernel32.GlobalLock(handle)
-            size = ctypes.windll.kernel32.GlobalSize(handle)
-            raw_data = ctypes.string_at(lock, size)
-            ctypes.windll.kernel32.GlobalUnlock(handle)
-            
-            dib_header_size = int.from_bytes(raw_data[0:4], 'little')
-            offset = 14 + dib_header_size
-            bmp_header = b'BM' + (14 + size).to_bytes(4, 'little') + b'\x00\x00\x00\x00' + offset.to_bytes(4, 'little')
-            return Image.open(io.BytesIO(bmp_header + raw_data)).copy()
-            
-    except Exception as e_clip:
-        return None
-    finally:
-        ctypes.windll.user32.CloseClipboard()
-    return None
 
 # 自作モジュールのインポート
 from src.ocr_engine import SakatsukuOCREngine
 from src.gsheet_client import SakatsukuGSheetClient
-from src.config import PARAM_LABELS
+from src.config import DEFAULT_ROIS, GROUPS, GK_ALIASES
 
 # アプリの基本設定
 st.set_page_config(
@@ -146,64 +63,186 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# プレミアムなCSSスタイリングの適用 (ダークテーマ、ガラスモルフィズム風)
+# プレミアムなApple Pro漆黒ミニマリズムUIスタイリングの適用 (色数を極限まで抑制し、メリハリを最大化)
 st.markdown("""
 <style>
-    .main {
-        background-color: #0e1117;
-        color: #fafafa;
+    /* 全体背景とベーステキストの強制適用 */
+    [data-testid="stAppViewContainer"], .stApp, .main, [data-testid="stHeader"] {
+        background-color: #1c1c1e !important;
+        color: #f5f5f7 !important;
+        font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "Helvetica Neue", Helvetica, Arial, sans-serif;
     }
+    .main {
+        background-color: #1c1c1e;
+        color: #f5f5f7;
+    }
+    
+    /* Apple Pro ミニマルタイトル */
+    .main-title {
+        color: #ffffff;
+        font-size: 2.2rem;
+        font-weight: 700;
+        text-align: center;
+        margin-top: 1.5rem;
+        margin-bottom: 0.2rem;
+        letter-spacing: -0.02em;
+    }
+    
+    .subtitle {
+        text-align: center;
+        color: #8e8e93; /* SF Text Secondary */
+        font-size: 1.0rem;
+        margin-bottom: 2rem;
+        font-weight: 400;
+    }
+    
+    /* Apple純正設定のようなフラットなカードデザイン */
+    .apple-card {
+        background: #2c2c2e; /* Apple System Card Background */
+        border: 1px solid #3a3a3c;
+        border-radius: 12px;
+        padding: 20px;
+        margin-bottom: 20px;
+        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
+    }
+    
+    /* Appleスタイルボタン */
     .stButton>button {
-        background-color: #00ffaa;
-        color: #0e1117;
-        font-weight: bold;
+        background-color: #0071e3; /* Apple SF Pro Blue Primary */
+        color: #ffffff !important;
+        font-weight: 600;
+        font-size: 13px;
         border-radius: 8px;
         border: none;
-        padding: 0.5rem 1.5rem;
-        transition: all 0.3s ease;
+        padding: 8px 24px;
+        transition: background-color 0.15s ease;
     }
     .stButton>button:hover {
-        background-color: #00cc88;
-        transform: scale(1.02);
+        background-color: #147ce5;
+        border: none;
     }
-    .stDataFrame {
-        border-radius: 10px;
-        overflow: hidden;
+    .stButton>button:active {
+        background-color: #0062c4;
     }
+
+    /* クールでフラットな見出し */
     h1, h2, h3 {
-        color: #00ffaa !important;
-        font-family: 'Outfit', 'Inter', sans-serif;
+        color: #ffffff !important;
+        font-weight: 700;
+        letter-spacing: -0.01em;
+        border: none !important;
+        margin-top: 0;
     }
+    
+    /* サイドバーのApple System Settings風デザイン */
     .sidebar-header {
-        font-weight: bold;
-        color: #00ffaa;
-        border-bottom: 2px solid #00ffaa;
-        padding-bottom: 5px;
-        margin-bottom: 15px;
+        font-weight: 700;
+        color: #ffffff;
+        font-size: 14px;
+        padding-bottom: 8px;
+        border-bottom: 1px solid #3a3a3c;
+        margin-bottom: 16px;
+    }
+    
+    /* タブデザインの最適化 */
+    .stTabs [data-baseweb="tab-list"] {
+        gap: 4px;
+        background-color: #1c1c1e;
+        padding: 4px;
+        border-radius: 8px;
+        border: 1px solid #3a3a3c;
+    }
+    .stTabs [data-baseweb="tab"] {
+        border-radius: 6px;
+        padding: 6px 16px;
+        color: #8e8e93;
+        font-weight: 600;
+        font-size: 13px;
+        transition: all 0.1s ease;
+    }
+    .stTabs [aria-selected="true"] {
+        background-color: #2c2c2e !important;
+        color: #ffffff !important;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.15);
     }
 </style>
 """, unsafe_allow_html=True)
 
 # セッション状態の初期化
+import sys
+import importlib
+import inspect
 if "ocr_engine" not in st.session_state:
-    with st.spinner("OCRエンジンの初期化中...（初回は数秒かかります）"):
+    with st.spinner("OCRシステム起動中..."):
         st.session_state.ocr_engine = SakatsukuOCREngine()
+else:
+    # 開発中のコード変更に追従するため、メソッドシグネチャを動的に検証して自動再ロード
+    sig = inspect.signature(st.session_state.ocr_engine.extract_all_parameters)
+    if "is_preprocessed" not in sig.parameters:
+        with st.spinner("OCRシステムの定義更新を検知。再起動中..."):
+            # キャッシュされたモジュールを強制リロードして最新のコードを100%確実に読み込む
+            if "src.ocr_engine" in sys.modules:
+                importlib.reload(sys.modules["src.ocr_engine"])
+            from src.ocr_engine import SakatsukuOCREngine
+            st.session_state.ocr_engine = SakatsukuOCREngine()
 
 if "parsed_results" not in st.session_state:
-    st.session_state.parsed_results = []  # 解析済みレコードのリスト (辞書形式)
+    st.session_state.parsed_results = []  # 解析結果レコードリスト
 
 if "target_images" not in st.session_state:
-    st.session_state.target_images = []  # 読み込んだ画像のリスト (名前, PIL.Image)
+    st.session_state.target_images = []  # メモリ上の画像リスト (name, PILImage)
+
+# 座標調整パラメータのセッション同期用初期化
+if "global_scale_x" not in st.session_state:
+    st.session_state.global_scale_x = 1.00
+if "global_scale_y" not in st.session_state:
+    st.session_state.global_scale_y = 1.00
+if "global_offset_x" not in st.session_state:
+    st.session_state.global_offset_x = 0
+if "global_offset_y" not in st.session_state:
+    st.session_state.global_offset_y = 0
+if "is_gk" not in st.session_state:
+    st.session_state.is_gk = False
+if "active_items" not in st.session_state:
+    st.session_state.active_items = list(DEFAULT_ROIS.keys())
+
+# グループオフセット・スケールの初期化
+if "group_offsets" not in st.session_state:
+    st.session_state.group_offsets = {grp: [0, 0] for grp in GROUPS.keys()}
+if "group_scales" not in st.session_state:
+    st.session_state.group_scales = {grp: [1.0, 1.0] for grp in GROUPS.keys()}
+
+# 個別オフセット・スケールの初期化
+if "individual_offsets" not in st.session_state:
+    st.session_state.individual_offsets = {item: [0, 0] for item in DEFAULT_ROIS.keys()}
+if "individual_scales" not in st.session_state:
+    st.session_state.individual_scales = {item: [1.0, 1.0] for item in DEFAULT_ROIS.keys()}
 
 # 一時的な認証情報の保存パス
 CREDENTIALS_PATH = "C:\\Users\\katsu\\.gemini\\antigravity\\scratch\\sakatsuku_2026\\credentials_temp.json"
 
+def get_image_base64(img_pil):
+    """PIL画像をBase64形式のData URIに高速変換します。"""
+    buffered = io.BytesIO()
+    img_pil.save(buffered, format="PNG")
+    img_str = base64.b64encode(buffered.getvalue()).decode("utf-8")
+    return f"data:image/png;base64,{img_str}"
+
+def normalize_and_convert_to_pil(img_pil, ocr_engine):
+    """画像の自動トリミングおよび1920x1080正規化を行い、PIL Imageとして返します。"""
+    # OpenCV BGR画像に変換
+    image_np = cv2.cvtColor(np.array(img_pil), cv2.COLOR_RGB2BGR)
+    # OCRエンジンによる自動トリミング・1920x1080リサイズ
+    normalized_np = ocr_engine.preprocess_image(image_np)
+    # PIL RGB画像に戻す
+    normalized_rgb = cv2.cvtColor(normalized_np, cv2.COLOR_BGR2RGB)
+    return Image.fromarray(normalized_rgb)
+
 # --- サイドバー：設定エリア ---
 with st.sidebar:
-    st.markdown('<p class="sidebar-header">⚙️ Googleスプレッドシート設定</p>', unsafe_allow_html=True)
+    st.markdown('<p class="sidebar-header">Googleスプレッドシート設定</p>', unsafe_allow_html=True)
     
-    # 認証情報の入力方式の選択
-    auth_method = st.radio("認証キー(JSON)の入力方法", ["ファイルをアップロード", "テキストを直接貼り付け", "保存されたキーを使用"])
+    auth_method = st.radio("認証キー(JSON)の入力方法", ["保存されたキーを使用", "ファイルをアップロード", "テキストを直接貼り付け"])
     
     credentials_json = None
     
@@ -212,21 +251,22 @@ with st.sidebar:
         if uploaded_json is not None:
             try:
                 credentials_json = json.load(uploaded_json)
-                # 次回のために一時保存
+                os.makedirs(os.path.dirname(CREDENTIALS_PATH), exist_ok=True)
                 with open(CREDENTIALS_PATH, "w", encoding="utf-8") as f:
                     json.dump(credentials_json, f, ensure_ascii=False, indent=2)
-                st.success("認証情報を読み込みました。")
+                st.success("認証情報をロードしました。")
             except Exception as e:
                 st.error(f"JSONの解析エラー: {e}")
                 
     elif auth_method == "テキストを直接貼り付け":
-        json_text = st.text_area("サービスアカウントJSONの中身を貼り付け", height=200)
+        json_text = st.text_area("サービスアカウントJSONの中身を貼り付け", height=150)
         if json_text:
             try:
                 credentials_json = json.loads(json_text)
+                os.makedirs(os.path.dirname(CREDENTIALS_PATH), exist_ok=True)
                 with open(CREDENTIALS_PATH, "w", encoding="utf-8") as f:
                     json.dump(credentials_json, f, ensure_ascii=False, indent=2)
-                st.success("認証情報を読み込みました。")
+                st.success("認証情報をロードしました。")
             except Exception as e:
                 st.error(f"JSONの解析エラー: {e}")
                 
@@ -235,70 +275,68 @@ with st.sidebar:
             try:
                 with open(CREDENTIALS_PATH, "r", encoding="utf-8") as f:
                     credentials_json = json.load(f)
-                st.success("保存済みの認証情報をロードしました。")
+                st.success("保存済みキーをロードしました。")
             except Exception as e:
                 st.error(f"ロード失敗: {e}")
         else:
             st.warning("保存された認証情報が見つかりません。")
 
-    # 書き込み先スプレッドシートの情報
     spreadsheet_url = st.text_input(
         "Googleスプレッドシートの共有URL",
-        value=st.session_state.get("gsheet_url", ""),
-        help="サービスアカウント（JSONに記載されているメールアドレス）に対して『編集者』として共有されたスプレッドシートのURLを入力してください。"
+        value=st.session_state.get("gsheet_url", "")
     )
     if spreadsheet_url:
         st.session_state.gsheet_url = spreadsheet_url
 
     sheet_name = st.text_input(
         "書き込み先シート名",
-        value=st.session_state.get("gsheet_name", "選手データ"),
-        help="スプレッドシート内の対象タブ名を入力してください。存在しない場合は自動作成されます。"
+        value=st.session_state.get("gsheet_name", "選手データ")
     )
     if sheet_name:
         st.session_state.gsheet_name = sheet_name
 
 # --- メインエリア：アプリケーション本体 ---
-st.title("⚽ サカつく2026 パラメーター自動OCRリーダー")
-st.write("選手のパラメータ画面画像を読み取り、Googleスプレッドシートへ自動追記します。")
+st.markdown('<div class="main-title">Parameter Precision Reader</div>', unsafe_allow_html=True)
+st.markdown('<div class="subtitle">高精度画像解析と、極めてスムーズなアライメント調整を提供するパラメータ抽出システム。</div>', unsafe_allow_html=True)
 
-# アプリケーションの操作タブ
-tab_upload, tab_paste = st.tabs(["📁 画像ファイルアップロード", "📋 クリップボードからペースト"])
+# 1. 画像のインプットエリア
+st.markdown('<div class="apple-card">', unsafe_allow_html=True)
+st.subheader("画像ソースのロード")
+
+tab_upload, tab_paste = st.tabs(["画像ファイルアップロード", "クリップボードからペースト"])
 
 # アップローダーの画像取得
 with tab_upload:
     uploaded_files = st.file_uploader(
-        "パラメータ画面のスクリーンショット画像を選択（複数対応）",
+        "パラメータ画面のスクリーンショットを選択",
         type=["png", "jpg", "jpeg", "webp"],
-        accept_multiple_files=True
+        accept_multiple_files=True,
+        key="file_uploader_instance"
     )
     if uploaded_files:
         for file in uploaded_files:
             img = Image.open(file)
-            # 重複防止のため同名ファイルがない場合のみ追加
             if not any(name == file.name for name, _ in st.session_state.target_images):
-                st.session_state.target_images.append((file.name, img))
-        st.success(f"ファイルを読み込みました（現在合計 {len(st.session_state.target_images)} 枚の画像がメモリに保持されています）")
+                # ロードと同時にあらかじめ高精度自動トリミング・1920x1080正規化を完了させ、完全に一本化
+                normalized_img = normalize_and_convert_to_pil(img, st.session_state.ocr_engine)
+                st.session_state.target_images.append((file.name, normalized_img))
+        st.success(f"画像をロードおよび高精度正規化トリミング処理しました (現在合計: {len(st.session_state.target_images)}枚)")
 
-# クリップボードの画像取得
+# クリップボードからのペースト
 with tab_paste:
-    st.write("1. ゲーム中の選手パラメータ画面で画像をコピー（Ctrl+C または Win+Shift+S でキャプチャ）します。")
-    st.write("2. 下記のエリアをクリックしてフォーカスを当て、**`Ctrl + V`** キーを押すことで、画像が無劣化の超高解像度のまま直接読み込まれます。")
+    st.write("ゲーム中の選手パラメータ画面でキャプチャをコピーし、下のフォームをクリックして Ctrl + V キーを押してください。")
     
-    # 公式インラインカスタムコンポーネントの宣言と登録
+    # ペーストブリッジカスタムコンポーネント
     import streamlit.components.v1 as components
     parent_dir = os.path.dirname(os.path.abspath(__file__))
     paste_bridge_dir = os.path.join(parent_dir, "src", "paste_bridge")
     paste_bridge = components.declare_component("paste_bridge", path=paste_bridge_dir)
     
-    # 二重読み込み防止のためのセッション状態初期化
     if "last_pasted_base64" not in st.session_state:
         st.session_state.last_pasted_base64 = None
         
-    # カスタムコンポーネントの描画とデータの受け取り
     pasted_base64 = paste_bridge(key="paste_bridge_instance")
     
-    # 新しいデータを受信した場合の処理
     if pasted_base64 and pasted_base64 != st.session_state.last_pasted_base64:
         try:
             base64_str = pasted_base64
@@ -309,174 +347,267 @@ with tab_paste:
             img_bytes = base64.b64decode(base64_str)
             pasted_img = Image.open(io.BytesIO(img_bytes)).copy()
             
-            import time
-            clip_name = f"Clipboard_{int(time.time())}"
-            st.session_state.target_images.append((clip_name, pasted_img))
+            # ロードと同時にあらかじめ高精度自動トリミング・1920x1080正規化を完了させ、完全に一本化
+            normalized_img = normalize_and_convert_to_pil(pasted_img, st.session_state.ocr_engine)
             
-            # 重複実行を防止するために受信データをキャッシュ
+            clip_name = f"Clipboard_{int(time.time())}"
+            st.session_state.target_images.append((clip_name, normalized_img))
             st.session_state.last_pasted_base64 = pasted_base64
             
-            st.success("ブラウザ経由でクリップボードから完全無劣化の超高解像度画像を取得しました！")
-            st.rerun()  # メモリ上の画像をプレビューに即座に反映させるため再描画
+            st.success("クリップボードから画像を取得および高精度トリミング処理しました。")
+            st.rerun()
         except Exception as e_dec:
             st.error(f"画像のデコード中にエラーが発生しました: {e_dec}")
+st.markdown('</div>', unsafe_allow_html=True)
 
-# 現在メモリに読み込まれている画像の確認プレビュー
+# 2. クライアントサイド完全リアルタイム調整Canvas HUDのロード
 if st.session_state.target_images:
-    st.write("---")
-    st.subheader(f"🖼️ メモリ上の読み込み画像リスト ({len(st.session_state.target_images)}枚)")
+    st.markdown('<div class="apple-card">', unsafe_allow_html=True)
+    st.subheader("高精度座標フィッティング & リアルタイムプレビュー")
+    st.write("右側のスライダーを操作すると、ブラウザ側で遅延なく完全に滑らかに枠線が動きます。枠が数値エリアに重なるよう調整してください。")
     
-    # 読み込まれている画像のプレビューを一覧表示（生画像をそのまま渡すことでボケを100%防止）
-    cols_img = st.columns(min(len(st.session_state.target_images), 6))
-    for idx, (img_name, img) in enumerate(st.session_state.target_images):
-        with cols_img[idx % 6]:
-            st.caption(img_name)
-            st.image(img, use_container_width=True)
+    # 対象画像のセレクトボックス
+    img_names = [name for name, _ in st.session_state.target_images]
+    selected_img_name = st.selectbox("プレビュー対象画像", img_names)
+    selected_pil = [img for name, img in st.session_state.target_images if name == selected_img_name][0]
+    
+    # すでにトリミング・正規化済みのPIL画像のBase64 Data URIを取得（フロント/バックの座標完全統合）
+    image_uri = get_image_base64(selected_pil)
 
-# --- 画像の解析実行 ---
-if st.session_state.target_images:
-    st.write("---")
-    st.subheader("🔍 画像の解析処理")
+    # カスタムコンポーネント「fitting_hud」の宣言
+    fitting_hud_dir = os.path.join(parent_dir, "src", "fitting_hud")
+    fitting_hud = components.declare_component("fitting_hud", path=fitting_hud_dir)
+
+    # セッション状態でOCRの実行完了フラグを初期化
+    if "ocr_run_completed" not in st.session_state:
+        st.session_state.ocr_run_completed = False
+
+    # 双方向カスタムコンポーネントの実行 (Streamlit側からすべての最新調整パラメータを確実にJS側に引き渡してリセットを防止)
+    hud_response = fitting_hud(
+        key="fitting_hud_instance",
+        image_base64=image_uri,  # 標準引数として画像URIを確実に直接転送！
+        default_rois=DEFAULT_ROIS,
+        groups=GROUPS,
+        height=720,
+        is_gk=st.session_state.is_gk,
+        active_items=st.session_state.active_items,
+        global_scale_x=st.session_state.global_scale_x,
+        global_scale_y=st.session_state.global_scale_y,
+        global_offset=[st.session_state.global_offset_x, st.session_state.global_offset_y],
+        group_scales=st.session_state.group_scales,
+        group_offsets=st.session_state.group_offsets,
+        individual_scales=st.session_state.individual_scales,
+        individual_offsets=st.session_state.individual_offsets
+    )
     
-    col_analyze_btn, col_clear_btn = st.columns([1, 4])
+    # 解析実行フラグ
+    trigger_ocr_run = False
     
-    # 解析実行ボタン
-    with col_analyze_btn:
-        run_ocr = st.button("🚀 画像のOCR解析を開始")
+    # JSコンポーネント側からの双方向データ送信の受け取り・状態同期
+    if hud_response is not None:
+        resp_type = hud_response.get("type")
+        resp_data = hud_response.get("data", {})
         
-    with col_clear_btn:
-        if st.button("🗑️ 読み込んだ画像リストをクリア"):
-            st.session_state.target_images = []
-            st.session_state.parsed_results = []
-            st.success("読み込まれていた画像リストをクリアしました。")
-            st.rerun()
+        if resp_type == "update_state":
+            # ユーザーによる操作（パラメータ調整やロール切り替えなど）があった場合、OCR完了ロックを解除
+            st.session_state.ocr_run_completed = False
             
-    if run_ocr:
-        # 詳細なリアルタイム処理状況ログ表示用ステータスエリア
-        log_status = st.status("⚙️ OCR解析プロセスの進行状況 (リアルタイムログ)", expanded=True)
+            # JS側で調整された最新の座標・スライダーの状態をPython側に一瞬で同期
+            st.session_state.is_gk = resp_data.get("isGk", False)
+            st.session_state.active_items = resp_data.get("activeItems", [])
+            st.session_state.global_scale_x = resp_data.get("global_scale_x", 1.0)
+            st.session_state.global_scale_y = resp_data.get("global_scale_y", 1.0)
+            st.session_state.global_offset_x = resp_data.get("global_offset", [0, 0])[0]
+            st.session_state.global_offset_y = resp_data.get("global_offset", [0, 0])[1]
+            
+            # グループパラメータの同期
+            js_grp_offsets = resp_data.get("group_offsets", {})
+            js_grp_scales = resp_data.get("group_scales", {})
+            for grp in GROUPS.keys():
+                st.session_state.group_offsets[grp] = js_grp_offsets.get(grp, [0, 0])
+                st.session_state.group_scales[grp] = js_grp_scales.get(grp, [1.0, 1.0])
+                
+            # ロールに応じた有効な個別パラメータのキーリストを定義して完全同期 (不要なメイン項目のリセットとGK項目の同期漏れを完全封殺！)
+            base_detail_items = ["決定力", "キック力", "冷静さ", "ショートパス", "ロングパス", "キック精度", "突破力", "キープ力", "ボールタッチ", "ジャンプ", "コンタクト", "スタミナ", "走力", "敏捷性"]
+            if st.session_state.is_gk:
+                detail_items = base_detail_items + ["セービング", "反応速度", "1対1"]
+            else:
+                detail_items = base_detail_items + ["タックル", "パスカット", "マーク"]
+                
+            js_ind_offsets = resp_data.get("individual_offsets", {})
+            js_ind_scales = resp_data.get("individual_scales", {})
+            for item in detail_items:
+                st.session_state.individual_offsets[item] = js_ind_offsets.get(item, [0, 0])
+                st.session_state.individual_scales[item] = js_ind_scales.get(item, [1.0, 1.0])
+                
+        elif resp_type == "trigger_analysis":
+            # 解析実行ボタンがHTML側でクリックされた事を検知
+            # 同梱された「最後の最新アライメント座標」をPython側に一括完全同期し、非同期通信競合を100%封殺！
+            st.session_state.is_gk = resp_data.get("isGk", False)
+            st.session_state.active_items = resp_data.get("activeItems", [])
+            st.session_state.global_scale_x = resp_data.get("global_scale_x", 1.0)
+            st.session_state.global_scale_y = resp_data.get("global_scale_y", 1.0)
+            st.session_state.global_offset_x = resp_data.get("global_offset", [0, 0])[0]
+            st.session_state.global_offset_y = resp_data.get("global_offset", [0, 0])[1]
+            
+            js_grp_offsets = resp_data.get("group_offsets", {})
+            js_grp_scales = resp_data.get("group_scales", {})
+            for grp in GROUPS.keys():
+                st.session_state.group_offsets[grp] = js_grp_offsets.get(grp, [0, 0])
+                st.session_state.group_scales[grp] = js_grp_scales.get(grp, [1.0, 1.0])
+                
+            base_detail_items = ["決定力", "キック力", "冷静さ", "ショートパス", "ロングパス", "キック精度", "突破力", "キープ力", "ボールタッチ", "ジャンプ", "コンタクト", "スタミナ", "走力", "敏捷性"]
+            if st.session_state.is_gk:
+                detail_items = base_detail_items + ["セービング", "反応速度", "1対1"]
+            else:
+                detail_items = base_detail_items + ["タックル", "パスカット", "マーク"]
+                
+            js_ind_offsets = resp_data.get("individual_offsets", {})
+            js_ind_scales = resp_data.get("individual_scales", {})
+            for item in detail_items:
+                st.session_state.individual_offsets[item] = js_ind_offsets.get(item, [0, 0])
+                st.session_state.individual_scales[item] = js_ind_scales.get(item, [1.0, 1.0])
+
+            # 二重実行ガードが解除されている場合のみ、実行フラグを立てる
+            if not st.session_state.get("ocr_run_completed", False):
+                trigger_ocr_run = True
+
+
+    # --- OCR解析実行処理のハンドリング ---
+    if trigger_ocr_run:
+        log_status = st.status("OCR解析プロセスを実行中", expanded=True)
         
         with log_status:
-            st.write("▶ [INFO] 画像解析タスクを開始します。")
+            st.write("▶ [INFO] 同期された最新の調整座標に基づいて一括解析を開始します。")
             temp_results = []
             total_imgs = len(st.session_state.target_images)
             
             for idx, (img_name, img) in enumerate(st.session_state.target_images):
                 step_prefix = f"[{idx + 1}/{total_imgs}]"
-                st.write(f"**{step_prefix} 画像: {img_name} の解析処理中**")
+                st.write(f"**{step_prefix} 画像: {img_name} を解析中...**")
                 
                 try:
-                    # 1. 読み込みとリサイズ
-                    st.write(f"{step_prefix} [PROCESS] 1. 画像の標準化リサイズ処理を実行中 (1920x1080 に正規化)...")
+                    # トリミング・正規化済みのPIL画像を渡し、再トリミングによる座標ズレを完全に排除！(is_preprocessed=True)
+                    result = st.session_state.ocr_engine.extract_all_parameters(
+                        image_input=img,
+                        active_items=st.session_state.active_items,
+                        is_gk=st.session_state.is_gk,
+                        group_scales=st.session_state.group_scales,
+                        group_offsets=st.session_state.group_offsets,
+                        individual_scales=st.session_state.individual_scales,
+                        individual_offsets=st.session_state.individual_offsets,
+                        global_scale_x=st.session_state.global_scale_x,
+                        global_scale_y=st.session_state.global_scale_y,
+                        global_offset=(st.session_state.global_offset_x, st.session_state.global_offset_y),
+                        is_preprocessed=True  # すでに事前処理済みであることを通知
+                    )
                     
-                    # 2. クロップ切り出し
-                    st.write(f"{step_prefix} [PROCESS] 2. OpenCVによるパラメータ領域 (ROI) のクロップ切り出しを開始...")
-                    
-                    # 3. 前処理
-                    st.write(f"{step_prefix} [PROCESS] 3. 切り出し画像の前処理 (グレースケール化、拡大、適応的二値化) を適用中...")
-                    
-                    # 4. OCR文字認識
-                    st.write(f"{step_prefix} [PROCESS] 4. EasyOCRによる文字・数値の認識とテキスト抽出を実行中 (初回はモデルロードのため数秒要します)...")
-                    result = st.session_state.ocr_engine.extract_all_parameters(img)
-                    
-                    # 5. パースとマッピング
-                    st.write(f"{step_prefix} [PROCESS] 5. 抽出テキストの正規化と数値パースが完了しました。")
                     result["元画像名"] = img_name
                     temp_results.append(result)
-                    
-                    # 成功ログ
-                    st.write(f"✅ {step_prefix} [SUCCESS] [選手名: {result.get('選手名', '不明')}, 総合力: {result.get('総合力', '不明')}] のパラメータの復元に成功しました！")
+                    st.write(f"✅ {step_prefix} [SUCCESS] パラメータの復元に成功しました。")
                     
                 except Exception as ex:
-                    st.error(f"❌ {step_prefix} [ERROR] 解析中に致命的なエラーが発生しました: {ex}")
-                    # デバッグ用にエラー詳細を出力
+                    st.error(f"❌ {step_prefix} [ERROR] 解析中に予期せぬエラーが発生しました: {ex}")
                     import traceback
                     st.code(traceback.format_exc(), language="python")
             
             if temp_results:
-                # 解析結果をセッションに追加
                 st.session_state.parsed_results.extend(temp_results)
-                log_status.update(label="🎉 すべての画像のOCR解析が正常に終了しました！", state="complete", expanded=True)
-                st.success(f"{len(temp_results)}件の選手パラメータの解析結果を表に反映しました。")
+                st.session_state.ocr_run_completed = True  # OCR解析が完了したためフラグをTrueに設定し、二重実行をガード
+                log_status.update(label="すべての画像のOCR解析が完了しました。", state="complete", expanded=True)
+                st.success("解析結果テーブルを更新しました。画面の下部を確認してください。")
+st.markdown('</div>', unsafe_allow_html=True)
 
-# --- 解析結果の確認・編集・出力 ---
+# 3. 解析結果のプレビューと編集
 if st.session_state.parsed_results:
-    st.write("---")
-    st.subheader("📊 解析結果のプレビューとデータ編集")
-    st.info("💡 スプレッドシートへ書き込む前に、表のセルをダブルクリックして手動で数値を修正・確認できます。")
+    st.markdown('<div class="apple-card">', unsafe_allow_html=True)
+    st.subheader("解析結果の確認と編集")
+    st.write("数値を手動で編集する場合は、表のセルをダブルクリックして値を直接編集してください。")
     
-    # リストをPandas DataFrameに変換
     df_results = pd.DataFrame(st.session_state.parsed_results)
     
-    # 列の並び順を綺麗に整理する（基本情報→メイン→個別→その他）
+    # ヘッダー並び順の最適化
     all_columns = df_results.columns.tolist()
     column_order = [
-        "元画像名", "選手名", "ポジション", "ランク", "総合力",
-        "SHOランク", "SHO数値",
-        "PASランク", "PAS数値",
-        "DRBランク", "DRB数値",
-        "DEFランク", "DEF数値",
-        "PHYランク", "PHY数値",
-        "SPDランク", "SPD数値",
+        "元画像名", "総合力",
+        "SHO数値", "PAS数値", "DRB数値", "DEF数値", "PHY数値", "SPD数値",
         "決定力", "キック力", "冷静さ",
         "ショートパス", "ロングパス", "キック精度",
         "突破力", "キープ力", "ボールタッチ",
         "タックル", "パスカット", "マーク",
+        "セービング", "反応速度", "1対1",
         "ジャンプ", "コンタクト", "スタミナ",
         "走力", "敏捷性"
     ]
     
-    # 存在する列のみの順序に再定義
     actual_order = [col for col in column_order if col in all_columns]
-    # 残りの列を末尾に追加
     actual_order += [col for col in all_columns if col not in actual_order]
-    
     df_ordered = df_results[actual_order]
     
-    # ユーザーが編集可能な表を表示 (st.data_editor)
+    # 編集可能なインタラクティブテーブル
     edited_df = st.data_editor(df_ordered, use_container_width=True, num_rows="dynamic")
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    # 4. Apple Numbers風「超速コピペステーション」
+    st.markdown('<div class="apple-card">', unsafe_allow_html=True)
+    st.subheader("超速コピペステーション")
+    st.write("スプレッドシートやExcelに貼り付けるためのTSV形式テキスト。右上のコピーアイコンを1タップするだけでクリップボードに格納されます。")
     
-    # 解析元のクロップ画像プレビュー（アコーディオン）
-    with st.expander("📸 認識エリアの切り出し画像を確認する（デバッグ用）"):
-        if st.session_state.target_images:
-            selected_img_name = st.selectbox("画像を選択", [name for name, _ in st.session_state.target_images])
-            selected_img = [img for name, img in st.session_state.target_images if name == selected_img_name][0]
+    col_horizontal, col_vertical = st.columns(2)
+    clean_df = edited_df.fillna("")
+    
+    with col_horizontal:
+        st.markdown("### スプレッドシート行追加用（横展開TSV）")
+        st.write("横1行に項目ヘッダーと値が並びます。スプレッドシートの空き行にそのまま貼り付けることができます。")
+        
+        tsv_h_lines = []
+        tsv_h_lines.append("\t".join(clean_df.columns))
+        for _, row in clean_df.iterrows():
+            tsv_h_lines.append("\t".join([str(val) for val in row]))
             
-            # OpenCV画像に変換
-            img_cv = cv2.cvtColor(np.array(selected_img), cv2.COLOR_RGB2BGR)
-            crop_dict = st.session_state.ocr_engine.get_cropped_images_dict(img_cv)
+        tsv_horizontal_str = "\n".join(tsv_h_lines)
+        st.code(tsv_horizontal_str, language="tsv")
+
+    with col_vertical:
+        st.markdown("### 縦型カルテ入力用（縦展開TSV）")
+        st.write("「項目名 [Tab] 数値」の縦並び形式です。縦並びの管理表に一括で流し込めます。")
+        
+        tsv_v_lines = []
+        for _, row in clean_df.iterrows():
+            img_name = row.get("元画像名", "Image")
+            tsv_v_lines.append(f"--- 【画像: {img_name}】 ---")
+            for col in clean_df.columns:
+                if col != "元画像名":
+                    tsv_v_lines.append(f"{col}\t{row[col]}")
+            tsv_v_lines.append("")
             
-            # グリッド表示
-            cols = st.columns(6)
-            for idx, (label, crop) in enumerate(crop_dict.items()):
-                with cols[idx % 6]:
-                    st.caption(label)
-                    st.image(crop, use_container_width=True)
+        tsv_vertical_str = "\n".join(tsv_v_lines)
+        st.code(tsv_vertical_str, language="tsv")
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    # 5. バックアップ保存・直接書き込み
+    st.markdown('<div class="apple-card">', unsafe_allow_html=True)
+    st.subheader("バックアップ保存と出力")
     
-    # --- アクションエリア ---
-    st.write("---")
-    st.subheader("💾 データの出力・保存")
-    
-    col_sheet, col_excel, col_clear = st.columns([2, 1, 1])
+    col_sheet, col_excel, col_clear_res = st.columns([2, 1, 1])
     
     with col_sheet:
-        st.markdown("**1. Googleスプレッドシートへ書き込み**")
-        if st.button("📤 Googleスプレッドシートへ書き込む"):
+        st.markdown("**Googleスプレッドシートへエクスポート**")
+        if st.button("Googleスプレッドシートの最終行に追記", use_container_width=True):
             if not credentials_json:
-                st.error("左側サイドバーでGoogle APIの認証情報を設定してください。")
+                st.error("Google APIの認証情報をロードしてください。")
             elif not spreadsheet_url:
-                st.error("左側サイドバーでGoogleスプレッドシートの共有URLを入力してください。")
+                st.error("Googleスプレッドシートの共有URLを入力してください。")
             else:
                 try:
-                    with st.spinner("Googleスプレッドシートにアクセスし、データを最終行へ書き込み中..."):
+                    with st.spinner("スプレッドシートとセキュア通信中..."):
                         client = SakatsukuGSheetClient(credentials_info=credentials_json)
-                        
-                        # 編集後のデータを辞書のリストとして取得
                         records_to_write = edited_df.to_dict(orient="records")
                         
                         written_count = 0
                         for record in records_to_write:
-                            # NaN（空値）を除去
                             cleaned_record = {k: v for k, v in record.items() if pd.notna(v) and v != ""}
+                            cleaned_record.pop("元画像名", None)
                             
                             row_num = client.append_parameter_data(
                                 spreadsheet_url=spreadsheet_url,
@@ -485,28 +616,28 @@ if st.session_state.parsed_results:
                             )
                             written_count += 1
                         
-                        st.success(f"🎉 正常に {written_count}件のデータをGoogleスプレッドシートに追記しました！(最終行: 行番号{row_num}近辺)")
+                        st.success(f"スプレッドシートに {written_count}件のデータを追記しました。(最終行: {row_num})")
                 except Exception as e_gs:
-                    st.error(f"スプレッドシート書き込み中にエラーが発生しました: {e_gs}")
+                    st.error(f"エラーが発生しました: {e_gs}")
                     
     with col_excel:
-        st.markdown("**2. ローカル用ダウンロード**")
-        # Excelファイルのダウンロード準備
+        st.markdown("**ローカル用ダウンロード**")
         excel_buffer = io.BytesIO()
         with pd.ExcelWriter(excel_buffer, engine="openpyxl") as writer:
             edited_df.to_excel(writer, index=False, sheet_name="サカつく2026_パラメータ")
         excel_data = excel_buffer.getvalue()
         
         st.download_button(
-            label="📥 Excelファイル (.xlsx) として保存",
+            label="Excel (.xlsx) でダウンロード",
             data=excel_data,
             file_name="sakatsuku_parameters.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True
         )
         
-    with col_clear:
-        st.markdown("**3. リストのクリア**")
-        if st.button("🧹 表示リストを空にする", help="現在画面にプレビュー表示されているデータをクリアします。"):
+    with col_clear_res:
+        st.markdown("**データテーブルのクリア**")
+        if st.button("解析データを空にする", use_container_width=True):
             st.session_state.parsed_results = []
-            st.session_state.target_images = []  # 画像もクリア
             st.rerun()
+    st.markdown('</div>', unsafe_allow_html=True)
