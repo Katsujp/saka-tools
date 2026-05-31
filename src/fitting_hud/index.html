@@ -350,25 +350,25 @@
                 <div class="slider-row">
                     <div class="slider-header"><span>全体 X シフト</span><span class="slider-value" id="val_g_x">0 px</span></div>
                     <div class="slider-container">
-                        <input type="range" class="apple-slider" id="sld_g_x" min="-1920" max="1920" value="0" oninput="updateParam('g_x', this.value)">
+                        <input type="range" class="apple-slider" id="sld_g_x" min="-1920" max="1920" value="0" oninput="updateParam('g_x', this.value)" onchange="notifyStateChange()">
                     </div>
                 </div>
                 <div class="slider-row">
                     <div class="slider-header"><span>全体 Y シフト</span><span class="slider-value" id="val_g_y">0 px</span></div>
                     <div class="slider-container">
-                        <input type="range" class="apple-slider" id="sld_g_y" min="-1080" max="1080" value="0" oninput="updateParam('g_y', this.value)">
+                        <input type="range" class="apple-slider" id="sld_g_y" min="-1080" max="1080" value="0" oninput="updateParam('g_y', this.value)" onchange="notifyStateChange()">
                     </div>
                 </div>
                 <div class="slider-row">
                     <div class="slider-header"><span>全体 X スケール (幅)</span><span class="slider-value" id="val_g_s_x">1.00 x</span></div>
                     <div class="slider-container">
-                        <input type="range" class="apple-slider" id="sld_g_s_x" min="0.10" max="3.00" step="0.01" value="1.00" oninput="updateParam('g_s_x', this.value)">
+                        <input type="range" class="apple-slider" id="sld_g_s_x" min="0.10" max="3.00" step="0.01" value="1.00" oninput="updateParam('g_s_x', this.value)" onchange="notifyStateChange()">
                     </div>
                 </div>
                 <div class="slider-row">
                     <div class="slider-header"><span>全体 Y スケール (高さ)</span><span class="slider-value" id="val_g_s_y">1.00 x</span></div>
                     <div class="slider-container">
-                        <input type="range" class="apple-slider" id="sld_g_s_y" min="0.10" max="3.00" step="0.01" value="1.00" oninput="updateParam('g_s_y', this.value)">
+                        <input type="range" class="apple-slider" id="sld_g_s_y" min="0.10" max="3.00" step="0.01" value="1.00" oninput="updateParam('g_s_y', this.value)" onchange="notifyStateChange()">
                     </div>
                 </div>
             </div>
@@ -395,7 +395,11 @@
     }
 
     function sendMessage(type, data) {
-        const payload = { type: type, data: data };
+        const payload = { 
+            type: type, 
+            data: data,
+            msg_id: Date.now() + "_" + Math.random().toString(36).substring(2, 9)
+        };
         sendControlMessage("streamlit:setComponentValue", { value: payload });
     }
 
@@ -462,11 +466,13 @@
         group_offsets: {},
         group_scales: {},
         individual_offsets: {},
-        individual_scales: {}
+        individual_scales: {},
+        last_debug_log: "" // 最新の操作ログを保持
     };
 
     // 直前に送信した最新の状態のキャッシュ (非同期上書き戻りバグを完全封殺するためのローカル権限キャッシュ)
     let lastSentState = null;
+    let debounceTimer = null;
 
     // グループ別・個別調整の初期値設定
     Object.keys(GROUPS).forEach(grp => {
@@ -546,7 +552,6 @@
     function setupItemsGrid() {
         const grid = document.getElementById("itemsGrid");
         grid.innerHTML = "";
-        state.activeItems = [];
         
         // 表示項目リストを作成
         const baseList = ["総合力", "SHO数値", "PAS数値", "DRB数値", "DEF数値", "PHY数値", "SPD数値"];
@@ -555,16 +560,24 @@
         
         const list = baseList.concat(state.isGk ? gkList : fpList);
 
+        // 初回ロード時などで activeItems が完全に空の場合は、全項目をデフォルトONにする
+        if (!state.activeItems || state.activeItems.length === 0) {
+            state.activeItems = [...list];
+        } else {
+            // ロール変更時などに無効になった項目を除外するために、現在の有効項目のみにフィルター
+            state.activeItems = state.activeItems.filter(item => list.includes(item));
+        }
+
         list.forEach(item => {
-            state.activeItems.push(item); // 初期値はすべてON
+            const isChecked = state.activeItems.includes(item);
             
             const label = document.createElement("label");
-            label.className = "item-checkbox-label active";
+            label.className = `item-checkbox-label ${isChecked ? "active" : ""}`;
             label.id = `lbl_${item}`;
             
             const checkbox = document.createElement("input");
             checkbox.type = "checkbox";
-            checkbox.checked = true;
+            checkbox.checked = isChecked;
             checkbox.onchange = () => toggleItem(item, checkbox.checked);
             
             label.appendChild(checkbox);
@@ -742,10 +755,6 @@
             container.appendChild(accordionDiv);
         });
 
-        // 動的生成された全スライダー要素にフォーカス時のイベントリスナーとイベント通知を再登録
-        document.querySelectorAll(".apple-slider").forEach(sld => {
-            sld.addEventListener("change", notifyStateChange);
-        });
     }
 
     // 各種パラメータ変更時の超速ハンドラ (ドラッグ中にリアルタイム動作)
@@ -757,13 +766,14 @@
         
         document.getElementById(`val_${key}`).innerText = `${parseFloat(value).toFixed(unit === "x" ? 2 : 0)} ${unit}`;
         
+        // 操作ログを生成し state.last_debug_log に退避
+        const labelMap = { 'g_x': '全体 X シフト', 'g_y': '全体 Y シフト', 'g_s_x': '全体 X スケール', 'g_s_y': '全体 Y スケール' };
+        const label = labelMap[key] || key;
+        const formattedVal = parseFloat(value).toFixed(unit === "x" ? 2 : 0);
+        state.last_debug_log = `JS: '${label}' shifted to ${formattedVal}${unit}`;
+        
         redrawHUD();
     }
-    
-    // スライダーを離した（onchange相当）時のPython状態同期トリガー
-    document.querySelectorAll(".apple-slider").forEach(sld => {
-        sld.addEventListener("change", notifyStateChange);
-    });
 
     function updateGroupParam(grp, type, value) {
         const parsed = parseFloat(value);
@@ -780,6 +790,25 @@
             state.group_scales[grp][1] = parsed;
             document.getElementById(`val_grp_s_y_${grp}`).innerText = `${parsed.toFixed(2)} x`;
         }
+        
+        // 操作ログを生成し state.last_debug_log に退避
+        const GROUP_NAMES = {
+            "overall": "総合力",
+            "category": "カテゴリー数値",
+            "sho": "SHO",
+            "pas": "PAS",
+            "drb": "DRB",
+            "def": "DEF / GK特有項目",
+            "phy": "PHY",
+            "spd": "SPD"
+        };
+        const grpDispName = GROUP_NAMES[grp] || grp.toUpperCase();
+        const typeMap = { 'x': '全体 X シフト', 'y': '全体 Y シフト', 's_x': '全体 X スケール', 's_y': '全体 Y スケール' };
+        const label = typeMap[type] || type;
+        const unit = type.includes("s_") ? "x" : "px";
+        const formattedVal = parsed.toFixed(unit === "x" ? 2 : 0);
+        state.last_debug_log = `JS: '${grpDispName}' Group ${label} shifted to ${formattedVal}${unit}`;
+
         redrawHUD();
     }
 
@@ -798,34 +827,53 @@
             state.individual_scales[item][1] = parsed;
             document.getElementById(`val_ind_s_y_${item}`).innerText = `${parsed.toFixed(2)} x`;
         }
+        
+        // 操作ログを生成し state.last_debug_log に退避
+        const typeMap = { 'x': '個別 X シフト', 'y': '個別 Y シフト', 's_x': '個別 X スケール', 's_y': '個別 Y スケール' };
+        const label = typeMap[type] || type;
+        const unit = type.includes("s_") ? "x" : "px";
+        const formattedVal = parsed.toFixed(unit === "x" ? 2 : 0);
+        state.last_debug_log = `JS: '${item}' Individual ${label} shifted to ${formattedVal}${unit}`;
+
         redrawHUD();
     }
 
-    // Python側へのパラメータ通知 (スライダーのドラッグ完了時、または設定変更時)
+    // Python側へのパラメータ通知 (150ms デバウンス処理およびデバッグログ同梱)
     function notifyStateChange() {
-        // 現在のローカルの最新状態をディープコピーしてキャッシュし、親からの古い上書きメッセージを無効化する
-        lastSentState = {
-            g_x: state.g_x,
-            g_y: state.g_y,
-            g_s_x: state.g_s_x,
-            g_s_y: state.g_s_y,
-            group_offsets: JSON.parse(JSON.stringify(state.group_offsets)),
-            group_scales: JSON.parse(JSON.stringify(state.group_scales)),
-            individual_offsets: JSON.parse(JSON.stringify(state.individual_offsets)),
-            individual_scales: JSON.parse(JSON.stringify(state.individual_scales))
-        };
+        if (debounceTimer) {
+            clearTimeout(debounceTimer);
+        }
+        
+        debounceTimer = setTimeout(() => {
+            // 現在のローカルの最新状態をディープコピーしてキャッシュし、親からの古い上書きメッセージを無効化する
+            lastSentState = {
+                g_x: state.g_x,
+                g_y: state.g_y,
+                g_s_x: state.g_s_x,
+                g_s_y: state.g_s_y,
+                group_offsets: JSON.parse(JSON.stringify(state.group_offsets)),
+                group_scales: JSON.parse(JSON.stringify(state.group_scales)),
+                individual_offsets: JSON.parse(JSON.stringify(state.individual_offsets)),
+                individual_scales: JSON.parse(JSON.stringify(state.individual_scales)),
+                activeItems: [...state.activeItems] // 有効項目のキャッシュ
+            };
 
-        sendMessage("update_state", {
-            isGk: state.isGk,
-            activeItems: state.activeItems,
-            global_scale_x: state.g_s_x,
-            global_scale_y: state.g_s_y,
-            global_offset: [state.g_x, state.g_y],
-            group_scales: state.group_scales,
-            group_offsets: state.group_offsets,
-            individual_scales: state.individual_scales,
-            individual_offsets: state.individual_offsets
-        });
+            sendMessage("update_state", {
+                isGk: state.isGk,
+                activeItems: state.activeItems,
+                global_scale_x: state.g_s_x,
+                global_scale_y: state.g_s_y,
+                global_offset: [state.g_x, state.g_y],
+                group_scales: state.group_scales,
+                group_offsets: state.group_offsets,
+                individual_scales: state.individual_scales,
+                individual_offsets: state.individual_offsets,
+                debug_log: state.last_debug_log // デバッグログを同梱
+            });
+            
+            // 送信後は一度デバッグログを初期化
+            state.last_debug_log = "";
+        }, 150);
     }
 
     // 解析実行トリガー (全パラメータ座標データと解析実行フラグを単一メッセージに一括同梱して送信し、通信競合を完璧に排除)
@@ -839,7 +887,8 @@
             group_scales: state.group_scales,
             group_offsets: state.group_offsets,
             individual_scales: state.individual_scales,
-            individual_offsets: state.individual_offsets
+            individual_offsets: state.individual_offsets,
+            debug_log: "JS: '選択座標で解析を実行' がクリックされました"
         });
     }
 
@@ -968,9 +1017,7 @@
                     };
                 }
 
-                // 2. 親から渡された現在のアライメント調整状態の逆同期 (リラン時の表示リセットを完璧に防止)
-                // 【送信済み状態キャッシュによる逆同期フィルター】
-                // もし親から戻ってきた値が、直前に送信した latestState より古い（＝競合によって None でスキップされ古い値が降ってきた）場合は、上書きを完全にバイパス！
+                // 2. 親から渡された現在のアライメント調整状態の逆同期
                 let stateChanged = false;
                 if (args.is_gk !== undefined && state.isGk !== args.is_gk) {
                     state.isGk = args.is_gk;
@@ -979,7 +1026,24 @@
                     stateChanged = true;
                 }
                 
-                // 全体Xスケール逆同期フィルター
+                // 有効チェックON/OFF状態の逆同期 (逆流上書き戻り防止ガード付き)
+                if (args.active_items !== undefined && Array.isArray(args.active_items)) {
+                    const isOld = lastSentState && lastSentState.activeItems && (
+                        args.active_items.length !== lastSentState.activeItems.length ||
+                        !args.active_items.every(x => lastSentState.activeItems.includes(x))
+                    );
+                    
+                    if (!isOld) {
+                        const hasDiff = state.activeItems.length !== args.active_items.length ||
+                            !state.activeItems.every(x => args.active_items.includes(x));
+                        if (hasDiff) {
+                            state.activeItems = [...args.active_items];
+                            stateChanged = true;
+                        }
+                    }
+                }
+                
+                // 全体Xスケール逆同期
                 if (args.global_scale_x !== undefined) {
                     const isOld = lastSentState && args.global_scale_x !== lastSentState.g_s_x;
                     if (!isOld && state.g_s_x !== args.global_scale_x) {
@@ -989,7 +1053,7 @@
                         stateChanged = true;
                     }
                 }
-                // 全体Yスケール逆同期フィルター
+                // 全体Yスケール逆同期
                 if (args.global_scale_y !== undefined) {
                     const isOld = lastSentState && args.global_scale_y !== lastSentState.g_s_y;
                     if (!isOld && state.g_s_y !== args.global_scale_y) {
@@ -999,8 +1063,8 @@
                         stateChanged = true;
                     }
                 }
-                // 全体オフセット逆同期フィルター
-                if (args.global_offset && args.global_offset.length >= 2) {
+                // 全体オフセット逆同期
+                if (args.global_offset && Array.isArray(args.global_offset) && args.global_offset.length >= 2) {
                     const valX = args.global_offset[0];
                     const valY = args.global_offset[1];
                     const isOld = lastSentState && (valX !== lastSentState.g_x || valY !== lastSentState.g_y);
@@ -1015,28 +1079,33 @@
                     }
                 }
 
-                // グループ・個別パラメータの逆同期 (ディープコピーを適用し、スライダーがある有効キーのみで厳密にスマート差分チェックをして無限再生成ループを完全封殺！)
+                // グループパラメータの逆同期 (安全ガード付き)
                 let groupChanged = false;
                 if (args.group_offsets) {
                     const grpOffCopy = JSON.parse(JSON.stringify(args.group_offsets));
                     let hasDiff = false;
                     for (const grp of Object.keys(GROUPS)) {
-                        // 【逆同期フィルター】
-                        const isOld = lastSentState && lastSentState.group_offsets[grp] && 
-                            (grpOffCopy[grp][0] !== lastSentState.group_offsets[grp][0] || 
-                             grpOffCopy[grp][1] !== lastSentState.group_offsets[grp][1]);
+                        if (!grpOffCopy[grp] || !Array.isArray(grpOffCopy[grp]) || grpOffCopy[grp].length < 2) continue; // 存在チェックと配列型ガード
+                        
+                        const lastSentGrp = lastSentState && lastSentState.group_offsets && lastSentState.group_offsets[grp];
+                        const isOld = lastSentGrp && 
+                            (grpOffCopy[grp][0] !== lastSentGrp[0] || 
+                             grpOffCopy[grp][1] !== lastSentGrp[1]);
                              
                         if (!isOld) {
-                            if (!state.group_offsets[grp] || 
-                                state.group_offsets[grp][0] !== grpOffCopy[grp][0] ||
-                                state.group_offsets[grp][1] !== grpOffCopy[grp][1]) {
+                            const currentGrp = state.group_offsets[grp];
+                            if (!currentGrp || 
+                                currentGrp[0] !== grpOffCopy[grp][0] ||
+                                currentGrp[1] !== grpOffCopy[grp][1]) {
                                 hasDiff = true;
                                 break;
                             }
                         }
                     }
                     if (hasDiff) {
-                        state.group_offsets = grpOffCopy;
+                        for (const grp of Object.keys(grpOffCopy)) {
+                            state.group_offsets[grp] = grpOffCopy[grp];
+                        }
                         groupChanged = true;
                     }
                 }
@@ -1044,67 +1113,86 @@
                     const grpSclCopy = JSON.parse(JSON.stringify(args.group_scales));
                     let hasDiff = false;
                     for (const grp of Object.keys(GROUPS)) {
-                        const isOld = lastSentState && lastSentState.group_scales[grp] && 
-                            (grpSclCopy[grp][0] !== lastSentState.group_scales[grp][0] || 
-                             grpSclCopy[grp][1] !== lastSentState.group_scales[grp][1]);
+                        if (!grpSclCopy[grp] || !Array.isArray(grpSclCopy[grp]) || grpSclCopy[grp].length < 2) continue; // 存在チェックと配列型ガード
+                        
+                        const lastSentGrpScl = lastSentState && lastSentState.group_scales && lastSentState.group_scales[grp];
+                        const isOld = lastSentGrpScl && 
+                            (grpSclCopy[grp][0] !== lastSentGrpScl[0] || 
+                             grpSclCopy[grp][1] !== lastSentGrpScl[1]);
                              
                         if (!isOld) {
-                            if (!state.group_scales[grp] || 
-                                state.group_scales[grp][0] !== grpSclCopy[grp][0] ||
-                                state.group_scales[grp][1] !== grpSclCopy[grp][1]) {
+                            const currentGrpScl = state.group_scales[grp];
+                            if (!currentGrpScl || 
+                                currentGrpScl[0] !== grpSclCopy[grp][0] ||
+                                currentGrpScl[1] !== grpSclCopy[grp][1]) {
                                 hasDiff = true;
                                 break;
                             }
                         }
                     }
                     if (hasDiff) {
-                        state.group_scales = grpSclCopy;
+                        for (const grp of Object.keys(grpSclCopy)) {
+                            state.group_scales[grp] = grpSclCopy[grp];
+                        }
                         groupChanged = true;
                     }
                 }
                 
+                // 個別パラメータの逆同期 (安全ガード付き)
                 let indivChanged = false;
                 if (args.individual_offsets) {
                     const indOffCopy = JSON.parse(JSON.stringify(args.individual_offsets));
                     let hasDiff = false;
-                    for (const item of state.activeItems) {
-                        const isOld = lastSentState && lastSentState.individual_offsets[item] && 
-                            (indOffCopy[item][0] !== lastSentState.individual_offsets[item][0] || 
-                             indOffCopy[item][1] !== lastSentState.individual_offsets[item][1]);
+                    for (const item of Object.keys(indOffCopy)) {
+                        if (!indOffCopy[item] || !Array.isArray(indOffCopy[item]) || indOffCopy[item].length < 2) continue; // 存在チェックと配列型ガード
+                        
+                        const lastSentInd = lastSentState && lastSentState.individual_offsets && lastSentState.individual_offsets[item];
+                        const isOld = lastSentInd && 
+                            (indOffCopy[item][0] !== lastSentInd[0] || 
+                             indOffCopy[item][1] !== lastSentInd[1]);
                              
                         if (!isOld) {
-                            if (!state.individual_offsets[item] || 
-                                state.individual_offsets[item][0] !== indOffCopy[item][0] ||
-                                state.individual_offsets[item][1] !== indOffCopy[item][1]) {
+                            const currentInd = state.individual_offsets[item];
+                            if (!currentInd || 
+                                currentInd[0] !== indOffCopy[item][0] ||
+                                currentInd[1] !== indOffCopy[item][1]) {
                                 hasDiff = true;
                                 break;
                             }
                         }
                     }
                     if (hasDiff) {
-                        state.individual_offsets = indOffCopy;
+                        for (const item of Object.keys(indOffCopy)) {
+                            state.individual_offsets[item] = indOffCopy[item];
+                        }
                         indivChanged = true;
                     }
                 }
                 if (args.individual_scales) {
                     const indSclCopy = JSON.parse(JSON.stringify(args.individual_scales));
                     let hasDiff = false;
-                    for (const item of state.activeItems) {
-                        const isOld = lastSentState && lastSentState.individual_scales[item] && 
-                            (indSclCopy[item][0] !== lastSentState.individual_scales[item][0] || 
-                             indSclCopy[item][1] !== lastSentState.individual_scales[item][1]);
+                    for (const item of Object.keys(indSclCopy)) {
+                        if (!indSclCopy[item] || !Array.isArray(indSclCopy[item]) || indSclCopy[item].length < 2) continue; // 存在チェックと配列型ガード
+                        
+                        const lastSentIndScl = lastSentState && lastSentState.individual_scales && lastSentState.individual_scales[item];
+                        const isOld = lastSentIndScl && 
+                            (indSclCopy[item][0] !== lastSentIndScl[0] || 
+                             indSclCopy[item][1] !== lastSentIndScl[1]);
                              
                         if (!isOld) {
-                            if (!state.individual_scales[item] || 
-                                state.individual_scales[item][0] !== indSclCopy[item][0] ||
-                                state.individual_scales[item][1] !== indSclCopy[item][1]) {
+                            const currentIndScl = state.individual_scales[item];
+                            if (!currentIndScl || 
+                                currentIndScl[0] !== indSclCopy[item][0] ||
+                                currentIndScl[1] !== indSclCopy[item][1]) {
                                 hasDiff = true;
                                 break;
                             }
                         }
                     }
                     if (hasDiff) {
-                        state.individual_scales = indSclCopy;
+                        for (const item of Object.keys(indSclCopy)) {
+                            state.individual_scales[item] = indSclCopy[item];
+                        }
                         indivChanged = true;
                     }
                 }
@@ -1131,11 +1219,20 @@
     });
 
     // 初期化処理
+    // 個別調整の初期値設定 (全項目を安全に事前初期化してTypeErrorを完全に防止！)
+    const allKnownItems = Object.keys(DEFAULT_ROIS).concat(["セービング", "反応速度", "1対1"]);
+    allKnownItems.forEach(item => {
+        state.individual_offsets[item] = [0, 0];
+        state.individual_scales[item] = [1.0, 1.0];
+    });
+    
     setupItemsGrid();
     
-    // イベントリスナーの動的割り当て
-    document.querySelectorAll(".apple-slider").forEach(sld => {
-        sld.addEventListener("change", notifyStateChange);
+    // イベントデリゲーション：body上でスライダーのchangeイベントを一括監視し、再生成でもリスナーが剥がれないようにする
+    document.body.addEventListener("change", function(e) {
+        if (e.target && e.target.classList.contains("apple-slider")) {
+            notifyStateChange();
+        }
     });
 
     // ロードと同時に親フレームと接続シーケンスを開始

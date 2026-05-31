@@ -53,7 +53,6 @@ import cv2
 
 # 自作モジュールのインポート
 from src.ocr_engine import SakatsukuOCREngine
-from src.gsheet_client import SakatsukuGSheetClient
 from src.config import DEFAULT_ROIS, GROUPS, GK_ALIASES
 
 # アプリの基本設定
@@ -165,8 +164,18 @@ st.markdown("""
         color: #ffffff !important;
         box-shadow: 0 2px 8px rgba(0,0,0,0.15);
     }
+    
+    /* Streamlit再実行時の画面グレーアウトとチラつきを完全に無効化 */
+    [data-testid="stAppViewContainer"] [data-testid="stBlock"],
+    div.element-container,
+    iframe {
+        opacity: 1 !important;
+        transition: none !important;
+    }
 </style>
 """, unsafe_allow_html=True)
+
+
 
 # セッション状態の初期化
 import sys
@@ -212,14 +221,29 @@ if "group_offsets" not in st.session_state:
 if "group_scales" not in st.session_state:
     st.session_state.group_scales = {grp: [1.0, 1.0] for grp in GROUPS.keys()}
 
-# 個別オフセット・スケールの初期化
+# 個別オフセット・スケールの初期化 (GK追加項目も含めた全パラメータを完全網羅)
 if "individual_offsets" not in st.session_state:
-    st.session_state.individual_offsets = {item: [0, 0] for item in DEFAULT_ROIS.keys()}
+    all_rois = list(DEFAULT_ROIS.keys()) + ["セービング", "反応速度", "1対1"]
+    st.session_state.individual_offsets = {item: [0, 0] for item in all_rois}
 if "individual_scales" not in st.session_state:
-    st.session_state.individual_scales = {item: [1.0, 1.0] for item in DEFAULT_ROIS.keys()}
+    all_rois = list(DEFAULT_ROIS.keys()) + ["セービング", "反応速度", "1対1"]
+    st.session_state.individual_scales = {item: [1.0, 1.0] for item in all_rois}
 
-# 一時的な認証情報の保存パス
-CREDENTIALS_PATH = "C:\\Users\\katsu\\.gemini\\antigravity\\scratch\\sakatsuku_2026\\credentials_temp.json"
+# リアルタイム同期ログ用セッション初期化
+if "sync_logs" not in st.session_state:
+    st.session_state.sync_logs = ["システム初期化完了。同期ログの監視を開始します。"]
+if "show_debug_log" not in st.session_state:
+    st.session_state.show_debug_log = False
+if "last_processed_msg_id" not in st.session_state:
+    st.session_state.last_processed_msg_id = None
+if "uploader_key" not in st.session_state:
+    st.session_state.uploader_key = "restore_uploader_0"
+if "tsv_horizontal" not in st.session_state:
+    st.session_state.tsv_horizontal = ""
+if "tsv_vertical" not in st.session_state:
+    st.session_state.tsv_vertical = ""
+
+
 
 def get_image_base64(img_pil):
     """PIL画像をBase64形式のData URIに高速変換します。"""
@@ -238,72 +262,15 @@ def normalize_and_convert_to_pil(img_pil, ocr_engine):
     normalized_rgb = cv2.cvtColor(normalized_np, cv2.COLOR_BGR2RGB)
     return Image.fromarray(normalized_rgb)
 
-# --- サイドバー：設定エリア ---
-with st.sidebar:
-    st.markdown('<p class="sidebar-header">Googleスプレッドシート設定</p>', unsafe_allow_html=True)
-    
-    auth_method = st.radio("認証キー(JSON)の入力方法", ["保存されたキーを使用", "ファイルをアップロード", "テキストを直接貼り付け"])
-    
-    credentials_json = None
-    
-    if auth_method == "ファイルをアップロード":
-        uploaded_json = st.file_uploader("credentials.json をアップロード", type=["json"])
-        if uploaded_json is not None:
-            try:
-                credentials_json = json.load(uploaded_json)
-                os.makedirs(os.path.dirname(CREDENTIALS_PATH), exist_ok=True)
-                with open(CREDENTIALS_PATH, "w", encoding="utf-8") as f:
-                    json.dump(credentials_json, f, ensure_ascii=False, indent=2)
-                st.success("認証情報をロードしました。")
-            except Exception as e:
-                st.error(f"JSONの解析エラー: {e}")
-                
-    elif auth_method == "テキストを直接貼り付け":
-        json_text = st.text_area("サービスアカウントJSONの中身を貼り付け", height=150)
-        if json_text:
-            try:
-                credentials_json = json.loads(json_text)
-                os.makedirs(os.path.dirname(CREDENTIALS_PATH), exist_ok=True)
-                with open(CREDENTIALS_PATH, "w", encoding="utf-8") as f:
-                    json.dump(credentials_json, f, ensure_ascii=False, indent=2)
-                st.success("認証情報をロードしました。")
-            except Exception as e:
-                st.error(f"JSONの解析エラー: {e}")
-                
-    elif auth_method == "保存されたキーを使用":
-        if os.path.exists(CREDENTIALS_PATH):
-            try:
-                with open(CREDENTIALS_PATH, "r", encoding="utf-8") as f:
-                    credentials_json = json.load(f)
-                st.success("保存済みキーをロードしました。")
-            except Exception as e:
-                st.error(f"ロード失敗: {e}")
-        else:
-            st.warning("保存された認証情報が見つかりません。")
-
-    spreadsheet_url = st.text_input(
-        "Googleスプレッドシートの共有URL",
-        value=st.session_state.get("gsheet_url", "")
-    )
-    if spreadsheet_url:
-        st.session_state.gsheet_url = spreadsheet_url
-
-    sheet_name = st.text_input(
-        "書き込み先シート名",
-        value=st.session_state.get("gsheet_name", "選手データ")
-    )
-    if sheet_name:
-        st.session_state.gsheet_name = sheet_name
-
 # --- メインエリア：アプリケーション本体 ---
-st.markdown('<div class="main-title">Parameter Precision Reader</div>', unsafe_allow_html=True)
-st.markdown('<div class="subtitle">高精度画像解析と、極めてスムーズなアライメント調整を提供するパラメータ抽出システム。</div>', unsafe_allow_html=True)
+st.markdown('<div class="main-title">サカつく2026 パラメータOCRリーダー v0.1</div>', unsafe_allow_html=True)
+st.markdown('<div class="subtitle">選手のパラメータタブの中身を読み取るツール</div>', unsafe_allow_html=True)
 
 # 1. 画像のインプットエリア
 st.markdown('<div class="apple-card">', unsafe_allow_html=True)
 st.subheader("画像ソースのロード")
 
-tab_upload, tab_paste = st.tabs(["画像ファイルアップロード", "クリップボードからペースト"])
+tab_paste, tab_upload = st.tabs(["クリップボードからペースト", "画像ファイルアップロード"])
 
 # アップローダーの画像取得
 with tab_upload:
@@ -400,76 +367,190 @@ if st.session_state.target_images:
         individual_offsets=st.session_state.individual_offsets
     )
     
+    # アライメント位置情報のローカル保存・復元機能
+    st.markdown("<p style='font-size: 13px; font-weight: 600; color: #8e8e93; margin-top: 15px; margin-bottom: 5px;'>アライメント矩形位置情報（ROI）のバックアップ</p>", unsafe_allow_html=True)
+    col_save, col_restore = st.columns(2)
+    
+    with col_save:
+        st.write("現在の設定をローカルPCに保存します。")
+        # JSONデータを動的作成
+        backup_data = {
+            "global_scale_x": st.session_state.global_scale_x,
+            "global_scale_y": st.session_state.global_scale_y,
+            "global_offset_x": st.session_state.global_offset_x,
+            "global_offset_y": st.session_state.global_offset_y,
+            "group_offsets": st.session_state.group_offsets,
+            "group_scales": st.session_state.group_scales,
+            "individual_offsets": st.session_state.individual_offsets,
+            "individual_scales": st.session_state.individual_scales,
+            "is_gk": st.session_state.is_gk,
+            "active_items": st.session_state.active_items
+        }
+        json_string = json.dumps(backup_data, ensure_ascii=False, indent=2)
+        st.download_button(
+            label="ローカルに保存 (JSON)",
+            data=json_string,
+            file_name="sakatsuku_alignment.json",
+            mime="application/json",
+            use_container_width=True
+        )
+        
+    with col_restore:
+        st.write("PCから設定ファイルを読み込みます。")
+        uploaded_config = st.file_uploader("ローカルから復元", type=["json"], label_visibility="collapsed", key=st.session_state.uploader_key)
+        if uploaded_config is not None:
+            try:
+                config_data = json.load(uploaded_config)
+                st.session_state.global_scale_x = config_data.get("global_scale_x", 1.0)
+                st.session_state.global_scale_y = config_data.get("global_scale_y", 1.0)
+                st.session_state.global_offset_x = config_data.get("global_offset_x", 0)
+                st.session_state.global_offset_y = config_data.get("global_offset_y", 0)
+                
+                # 安全なマッピング取得と補完 (キーの欠落によるバグをフォールバック付きで完全防止)
+                all_rois = list(DEFAULT_ROIS.keys()) + ["セービング", "反応速度", "1対1"]
+                uploaded_ind_offsets = config_data.get("individual_offsets", {})
+                uploaded_ind_scales = config_data.get("individual_scales", {})
+                st.session_state.individual_offsets = {
+                    item: uploaded_ind_offsets.get(item, [0, 0]) for item in all_rois
+                }
+                st.session_state.individual_scales = {
+                    item: uploaded_ind_scales.get(item, [1.0, 1.0]) for item in all_rois
+                }
+                
+                uploaded_grp_offsets = config_data.get("group_offsets", {})
+                uploaded_grp_scales = config_data.get("group_scales", {})
+                st.session_state.group_offsets = {
+                    grp: uploaded_grp_offsets.get(grp, [0, 0]) for grp in GROUPS.keys()
+                }
+                st.session_state.group_scales = {
+                    grp: uploaded_grp_scales.get(grp, [1.0, 1.0]) for grp in GROUPS.keys()
+                }
+                
+                st.session_state.is_gk = config_data.get("is_gk", False)
+                st.session_state.active_items = config_data.get("active_items", [])
+                
+                # すべての個別パラメータと大項目を完全に網羅して同期 (同期漏れバグを構造的に100%封殺！)
+                all_rois = list(DEFAULT_ROIS.keys()) + ["セービング", "反応速度", "1対1"]
+                js_ind_offsets = config_data.get("individual_offsets", {})
+                js_ind_scales = config_data.get("individual_scales", {})
+                for item in all_rois:
+                    if item in js_ind_offsets:
+                        st.session_state.individual_offsets[item] = js_ind_offsets[item]
+                    if item in js_ind_scales:
+                        st.session_state.individual_scales[item] = js_ind_scales[item]
+                
+                # 復元時に ocr_run_completed も False に初期化し、重複排除用のIDもクリアする
+                st.session_state.ocr_run_completed = False
+                if "last_processed_msg_id" in st.session_state:
+                    st.session_state.last_processed_msg_id = None
+                
+                # キーを動的に変更することで、file_uploader を強制的に空（クリア）にリセットして無限 rerun を根絶！
+                st.session_state.uploader_key = f"restore_uploader_{int(time.time())}"
+                st.success("アライメント設定をローカルファイルから復元しました！")
+                time.sleep(1)
+                st.rerun()
+            except Exception as e_cfg:
+                st.error(f"ファイル解析エラー: {e_cfg}")
+                
+    # リアルタイム同期ログ表示トグルとログビューアーUI (ON/OFF可能)
+    st.markdown("<p style='font-size: 13px; font-weight: 600; color: #8e8e93; margin-top: 15px; margin-bottom: 5px;'>デバッグ & 通信確認</p>", unsafe_allow_html=True)
+    st.session_state.show_debug_log = st.checkbox("リアルタイム同期ログを表示", value=st.session_state.show_debug_log)
+    if st.session_state.show_debug_log:
+        log_text = "\n".join(st.session_state.sync_logs[-10:]) # 直近10件のみ表示
+        st.code(log_text, language="text")
+
     # 解析実行フラグ
     trigger_ocr_run = False
     
     # JSコンポーネント側からの双方向データ送信の受け取り・状態同期
     if hud_response is not None:
+        msg_id = hud_response.get("msg_id")
         resp_type = hud_response.get("type")
         resp_data = hud_response.get("data", {})
         
-        if resp_type == "update_state":
-            # ユーザーによる操作（パラメータ調整やロール切り替えなど）があった場合、OCR完了ロックを解除
-            st.session_state.ocr_run_completed = False
-            
-            # JS側で調整された最新の座標・スライダーの状態をPython側に一瞬で同期
-            st.session_state.is_gk = resp_data.get("isGk", False)
-            st.session_state.active_items = resp_data.get("activeItems", [])
-            st.session_state.global_scale_x = resp_data.get("global_scale_x", 1.0)
-            st.session_state.global_scale_y = resp_data.get("global_scale_y", 1.0)
-            st.session_state.global_offset_x = resp_data.get("global_offset", [0, 0])[0]
-            st.session_state.global_offset_y = resp_data.get("global_offset", [0, 0])[1]
-            
-            # グループパラメータの同期
-            js_grp_offsets = resp_data.get("group_offsets", {})
-            js_grp_scales = resp_data.get("group_scales", {})
-            for grp in GROUPS.keys():
-                st.session_state.group_offsets[grp] = js_grp_offsets.get(grp, [0, 0])
-                st.session_state.group_scales[grp] = js_grp_scales.get(grp, [1.0, 1.0])
+        # 重複排除ガード: すでに処理済みのメッセージIDであれば処理をスキップ
+        if msg_id and st.session_state.get("last_processed_msg_id") == msg_id:
+            pass
+        else:
+            if msg_id:
+                st.session_state.last_processed_msg_id = msg_id
                 
-            # ロールに応じた有効な個別パラメータのキーリストを定義して完全同期 (不要なメイン項目のリセットとGK項目の同期漏れを完全封殺！)
-            base_detail_items = ["決定力", "キック力", "冷静さ", "ショートパス", "ロングパス", "キック精度", "突破力", "キープ力", "ボールタッチ", "ジャンプ", "コンタクト", "スタミナ", "走力", "敏捷性"]
-            if st.session_state.is_gk:
-                detail_items = base_detail_items + ["セービング", "反応速度", "1対1"]
-            else:
-                detail_items = base_detail_items + ["タックル", "パスカット", "マーク"]
+            if resp_type == "update_state":
+                # ユーザーによる操作（パラメータ調整やロール切り替えなど）があった場合、OCR完了ロックを解除
+                st.session_state.ocr_run_completed = False
                 
-            js_ind_offsets = resp_data.get("individual_offsets", {})
-            js_ind_scales = resp_data.get("individual_scales", {})
-            for item in detail_items:
-                st.session_state.individual_offsets[item] = js_ind_offsets.get(item, [0, 0])
-                st.session_state.individual_scales[item] = js_ind_scales.get(item, [1.0, 1.0])
+                # JS側で調整された最新の座標・スライダーの状態をPython側に一瞬で同期
+                st.session_state.is_gk = resp_data.get("isGk", False)
+                st.session_state.active_items = resp_data.get("activeItems", [])
+                st.session_state.global_scale_x = resp_data.get("global_scale_x", 1.0)
+                st.session_state.global_scale_y = resp_data.get("global_scale_y", 1.0)
+                st.session_state.global_offset_x = resp_data.get("global_offset", [0, 0])[0]
+                st.session_state.global_offset_y = resp_data.get("global_offset", [0, 0])[1]
                 
-        elif resp_type == "trigger_analysis":
-            # 解析実行ボタンがHTML側でクリックされた事を検知
-            # 同梱された「最後の最新アライメント座標」をPython側に一括完全同期し、非同期通信競合を100%封殺！
-            st.session_state.is_gk = resp_data.get("isGk", False)
-            st.session_state.active_items = resp_data.get("activeItems", [])
-            st.session_state.global_scale_x = resp_data.get("global_scale_x", 1.0)
-            st.session_state.global_scale_y = resp_data.get("global_scale_y", 1.0)
-            st.session_state.global_offset_x = resp_data.get("global_offset", [0, 0])[0]
-            st.session_state.global_offset_y = resp_data.get("global_offset", [0, 0])[1]
-            
-            js_grp_offsets = resp_data.get("group_offsets", {})
-            js_grp_scales = resp_data.get("group_scales", {})
-            for grp in GROUPS.keys():
-                st.session_state.group_offsets[grp] = js_grp_offsets.get(grp, [0, 0])
-                st.session_state.group_scales[grp] = js_grp_scales.get(grp, [1.0, 1.0])
+                # グループパラメータの同期
+                js_grp_offsets = resp_data.get("group_offsets", {})
+                js_grp_scales = resp_data.get("group_scales", {})
+                for grp in GROUPS.keys():
+                    st.session_state.group_offsets[grp] = js_grp_offsets.get(grp, [0, 0])
+                    st.session_state.group_scales[grp] = js_grp_scales.get(grp, [1.0, 1.0])
+                    
+                # すべての個別パラメータと大項目を完全に網羅して同期 (同期漏れバグを構造的に100%封殺！)
+                all_rois = list(DEFAULT_ROIS.keys()) + ["セービング", "反応速度", "1対1"]
+                js_ind_offsets = resp_data.get("individual_offsets", {})
+                js_ind_scales = resp_data.get("individual_scales", {})
+                for item in all_rois:
+                    if item in js_ind_offsets:
+                        st.session_state.individual_offsets[item] = js_ind_offsets[item]
+                    if item in js_ind_scales:
+                        st.session_state.individual_scales[item] = js_ind_scales[item]
                 
-            base_detail_items = ["決定力", "キック力", "冷静さ", "ショートパス", "ロングパス", "キック精度", "突破力", "キープ力", "ボールタッチ", "ジャンプ", "コンタクト", "スタミナ", "走力", "敏捷性"]
-            if st.session_state.is_gk:
-                detail_items = base_detail_items + ["セービング", "反応速度", "1対1"]
-            else:
-                detail_items = base_detail_items + ["タックル", "パスカット", "マーク"]
+                # デバッグログの追記 (JSからの動作確認の証跡として機能！)
+                js_log = resp_data.get("debug_log")
+                if js_log:
+                    import datetime
+                    now_str = datetime.datetime.now().strftime("%H:%M:%S")
+                    st.session_state.sync_logs.append(f"[{now_str}] {js_log}")
+                    st.session_state.sync_logs.append(f"[{now_str}] PY: st.session_state updated successfully.")
+                    if len(st.session_state.sync_logs) > 30:
+                        st.session_state.sync_logs = st.session_state.sync_logs[-30:]
+                    
+            elif resp_type == "trigger_analysis":
+                # 解析実行ボタンがHTML側でクリックされた事を検知
+                # 同梱された「最後の最新アライメント座標」をPython側に一括完全同期し、非同期通信競合を100%封殺！
+                st.session_state.is_gk = resp_data.get("isGk", False)
+                st.session_state.active_items = resp_data.get("activeItems", [])
+                st.session_state.global_scale_x = resp_data.get("global_scale_x", 1.0)
+                st.session_state.global_scale_y = resp_data.get("global_scale_y", 1.0)
+                st.session_state.global_offset_x = resp_data.get("global_offset", [0, 0])[0]
+                st.session_state.global_offset_y = resp_data.get("global_offset", [0, 0])[1]
                 
-            js_ind_offsets = resp_data.get("individual_offsets", {})
-            js_ind_scales = resp_data.get("individual_scales", {})
-            for item in detail_items:
-                st.session_state.individual_offsets[item] = js_ind_offsets.get(item, [0, 0])
-                st.session_state.individual_scales[item] = js_ind_scales.get(item, [1.0, 1.0])
-
-            # 二重実行ガードが解除されている場合のみ、実行フラグを立てる
-            if not st.session_state.get("ocr_run_completed", False):
+                js_grp_offsets = resp_data.get("group_offsets", {})
+                js_grp_scales = resp_data.get("group_scales", {})
+                for grp in GROUPS.keys():
+                    st.session_state.group_offsets[grp] = js_grp_offsets.get(grp, [0, 0])
+                    st.session_state.group_scales[grp] = js_grp_scales.get(grp, [1.0, 1.0])
+                    
+                # すべての個別パラメータと大項目を完全に網羅して同期 (同期漏れバグを構造的に100%封殺！)
+                all_rois = list(DEFAULT_ROIS.keys()) + ["セービング", "反応速度", "1対1"]
+                js_ind_offsets = resp_data.get("individual_offsets", {})
+                js_ind_scales = resp_data.get("individual_scales", {})
+                for item in all_rois:
+                    if item in js_ind_offsets:
+                        st.session_state.individual_offsets[item] = js_ind_offsets[item]
+                    if item in js_ind_scales:
+                        st.session_state.individual_scales[item] = js_ind_scales[item]
+                
+                # デバッグログの追記 (JSからの動作確認の証跡として機能！)
+                js_log = resp_data.get("debug_log")
+                if js_log:
+                    import datetime
+                    now_str = datetime.datetime.now().strftime("%H:%M:%S")
+                    st.session_state.sync_logs.append(f"[{now_str}] {js_log}")
+                    st.session_state.sync_logs.append(f"[{now_str}] PY: st.session_state (trigger_analysis) updated successfully.")
+                    if len(st.session_state.sync_logs) > 30:
+                        st.session_state.sync_logs = st.session_state.sync_logs[-30:]
+    
+                # 新しい明示的な解析ボタン押下イベント（新しい msg_id）なので、二重実行ガードを無視して無条件に実行
                 trigger_ocr_run = True
 
 
@@ -544,100 +625,126 @@ if st.session_state.parsed_results:
     actual_order += [col for col in all_columns if col not in actual_order]
     df_ordered = df_results[actual_order]
     
+    # 編集前に左端に選択用のチェックボックスカラムを追加
+    df_ordered.insert(0, "選択", True)
+    
     # 編集可能なインタラクティブテーブル
     edited_df = st.data_editor(df_ordered, use_container_width=True, num_rows="dynamic")
+    
+    col_empty_spacer, col_clear_res, col_clear_station, col_export = st.columns([1, 1, 1, 1])
+    with col_clear_res:
+        if st.button("解析結果テーブルを空にする", use_container_width=True):
+            st.session_state.parsed_results = []
+            st.session_state.tsv_horizontal = ""
+            st.session_state.tsv_vertical = ""
+            st.rerun()
+            
+    with col_clear_station:
+        if st.button("コピペステーションをクリアする", use_container_width=True):
+            st.session_state.tsv_horizontal = ""
+            st.session_state.tsv_vertical = ""
+            st.rerun()
+            
+    with col_export:
+        btn_export = st.button("コピペステーションに展開する", use_container_width=True)
+
+    # 項目名出力トグルチェックボックス (デフォルトOFF)
+    show_headers = st.checkbox("項目名を出力する", value=False)
+    
+    # コピペステーション展開処理の実行
+    if btn_export:
+        # 選択された（チェックONの）行のみを抽出 (現在の並び替え順を維持)
+        selected_df = edited_df[edited_df["選択"] == True].copy()
+        
+        # 選択列を除外して通常のデータに
+        if "選択" in selected_df.columns:
+            selected_df = selected_df.drop(columns=["選択"])
+            
+        selected_df = selected_df.fillna("")
+        
+        # 出力対象カラムの選定 (読み取り有効かつ少なくとも1行以上で有効な値が存在する項目のみ)
+        output_cols = ["元画像名"]
+        for col in selected_df.columns:
+            if col == "元画像名":
+                continue
+            is_active = col in st.session_state.active_items
+            has_value = False
+            for _, row in selected_df.iterrows():
+                if str(row[col]).strip() != "":
+                    has_value = True
+                    break
+            if is_active and has_value:
+                output_cols.append(col)
+                
+        # 横展開TSVの構築
+        tsv_h_lines = []
+        if show_headers:
+            # 項目名（ヘッダー）を出力し、先頭に元画像名も含める
+            tsv_h_lines.append("\t".join(output_cols))
+            for _, row in selected_df.iterrows():
+                tsv_h_lines.append("\t".join([str(row[col]) for col in output_cols]))
+        else:
+            # 項目名なし、かつ先頭の元画像名自体も完全に非表示
+            # output_colsから「元画像名」を除外したリストで出力
+            data_cols = [col for col in output_cols if col != "元画像名"]
+            for _, row in selected_df.iterrows():
+                tsv_h_lines.append("\t".join([str(row[col]) for col in data_cols]))
+                
+        st.session_state.tsv_horizontal = "\n".join(tsv_h_lines)
+        
+        # 縦展開TSVの構築
+        tsv_v_lines = []
+        for _, row in selected_df.iterrows():
+            img_name = row.get("元画像名", "Image")
+            # 項目名出力がONの場合のみ画像名デリミタを出力する
+            if show_headers:
+                tsv_v_lines.append(f"--- 【画像: {img_name}】 ---")
+            for col in selected_df.columns:
+                if col != "元画像名":
+                    is_active = col in st.session_state.active_items
+                    val_str = str(row[col]).strip()
+                    if is_active and val_str != "":
+                        if show_headers:
+                            # 項目名付き
+                            tsv_v_lines.append(f"{col}\t{row[col]}")
+                        else:
+                            # 項目名なし、値のみ
+                            tsv_v_lines.append(f"{row[col]}")
+            
+            # 画像間の区切り改行
+            if show_headers:
+                tsv_v_lines.append("")
+            elif tsv_v_lines and tsv_v_lines[-1] != "":
+                tsv_v_lines.append("")
+            
+        st.session_state.tsv_vertical = "\n".join(tsv_v_lines)
+        st.success("コピペステーションに選択データを展開しました！")
+        st.rerun()
+        
     st.markdown('</div>', unsafe_allow_html=True)
 
     # 4. Apple Numbers風「超速コピペステーション」
     st.markdown('<div class="apple-card">', unsafe_allow_html=True)
     st.subheader("超速コピペステーション")
-    st.write("スプレッドシートやExcelに貼り付けるためのTSV形式テキスト。右上のコピーアイコンを1タップするだけでクリップボードに格納されます。")
+    st.write("「コピペステーションに展開する」ボタンを押すと、チェックを入れた選択行のみが現在の並び順通りに出力されます。")
     
     col_horizontal, col_vertical = st.columns(2)
-    clean_df = edited_df.fillna("")
     
     with col_horizontal:
         st.markdown("### スプレッドシート行追加用（横展開TSV）")
-        st.write("横1行に項目ヘッダーと値が並びます。スプレッドシートの空き行にそのまま貼り付けることができます。")
-        
-        tsv_h_lines = []
-        tsv_h_lines.append("\t".join(clean_df.columns))
-        for _, row in clean_df.iterrows():
-            tsv_h_lines.append("\t".join([str(val) for val in row]))
-            
-        tsv_horizontal_str = "\n".join(tsv_h_lines)
-        st.code(tsv_horizontal_str, language="tsv")
+        st.write("横1行に値が並びます。スプレッドシートの空き行にそのまま貼り付けることができます。")
+        if st.session_state.tsv_horizontal:
+            st.code(st.session_state.tsv_horizontal, language="tsv")
+        else:
+            st.info("データが展開されていません。上のボタンを押してください。")
 
     with col_vertical:
         st.markdown("### 縦型カルテ入力用（縦展開TSV）")
-        st.write("「項目名 [Tab] 数値」の縦並び形式です。縦並びの管理表に一括で流し込めます。")
-        
-        tsv_v_lines = []
-        for _, row in clean_df.iterrows():
-            img_name = row.get("元画像名", "Image")
-            tsv_v_lines.append(f"--- 【画像: {img_name}】 ---")
-            for col in clean_df.columns:
-                if col != "元画像名":
-                    tsv_v_lines.append(f"{col}\t{row[col]}")
-            tsv_v_lines.append("")
-            
-        tsv_vertical_str = "\n".join(tsv_v_lines)
-        st.code(tsv_vertical_str, language="tsv")
+        st.write("「数値」または「項目名 [Tab] 数値」の縦並び形式です。縦並びの管理表に一括で流し込めます。")
+        if st.session_state.tsv_vertical:
+            st.code(st.session_state.tsv_vertical, language="tsv")
+        else:
+            st.info("データが展開されていません。上のボタンを押してください。")
     st.markdown('</div>', unsafe_allow_html=True)
 
-    # 5. バックアップ保存・直接書き込み
-    st.markdown('<div class="apple-card">', unsafe_allow_html=True)
-    st.subheader("バックアップ保存と出力")
-    
-    col_sheet, col_excel, col_clear_res = st.columns([2, 1, 1])
-    
-    with col_sheet:
-        st.markdown("**Googleスプレッドシートへエクスポート**")
-        if st.button("Googleスプレッドシートの最終行に追記", use_container_width=True):
-            if not credentials_json:
-                st.error("Google APIの認証情報をロードしてください。")
-            elif not spreadsheet_url:
-                st.error("Googleスプレッドシートの共有URLを入力してください。")
-            else:
-                try:
-                    with st.spinner("スプレッドシートとセキュア通信中..."):
-                        client = SakatsukuGSheetClient(credentials_info=credentials_json)
-                        records_to_write = edited_df.to_dict(orient="records")
-                        
-                        written_count = 0
-                        for record in records_to_write:
-                            cleaned_record = {k: v for k, v in record.items() if pd.notna(v) and v != ""}
-                            cleaned_record.pop("元画像名", None)
-                            
-                            row_num = client.append_parameter_data(
-                                spreadsheet_url=spreadsheet_url,
-                                sheet_name=sheet_name,
-                                param_dict=cleaned_record
-                            )
-                            written_count += 1
-                        
-                        st.success(f"スプレッドシートに {written_count}件のデータを追記しました。(最終行: {row_num})")
-                except Exception as e_gs:
-                    st.error(f"エラーが発生しました: {e_gs}")
-                    
-    with col_excel:
-        st.markdown("**ローカル用ダウンロード**")
-        excel_buffer = io.BytesIO()
-        with pd.ExcelWriter(excel_buffer, engine="openpyxl") as writer:
-            edited_df.to_excel(writer, index=False, sheet_name="サカつく2026_パラメータ")
-        excel_data = excel_buffer.getvalue()
-        
-        st.download_button(
-            label="Excel (.xlsx) でダウンロード",
-            data=excel_data,
-            file_name="sakatsuku_parameters.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            use_container_width=True
-        )
-        
-    with col_clear_res:
-        st.markdown("**データテーブルのクリア**")
-        if st.button("解析データを空にする", use_container_width=True):
-            st.session_state.parsed_results = []
-            st.rerun()
-    st.markdown('</div>', unsafe_allow_html=True)
+
