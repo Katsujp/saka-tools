@@ -7,7 +7,10 @@
         :root {
             --bg-color: #1c1c1e;
             --bg-hover: #2c2c2e;
-            --accent-color: #0a84ff; /* SF Pro Blue */
+            --bg-card: #2c2c2e;
+            --accent-color: #0071e3; /* Apple SF Pro Blue */
+            --accent-hover: #147ce5;
+            --accent-active: #0062c4;
             --border-color: #3a3a3c;
             --text-color: #ffffff;
             --text-secondary: #8e8e93;
@@ -20,67 +23,136 @@
             overflow: hidden;
             background-color: transparent;
             font-family: var(--font-family);
+            color: var(--text-color);
         }
 
-        #paste-box {
+        #paste-container {
             border: 1px dashed var(--border-color);
-            border-radius: 8px;
-            padding: 24px 20px;
-            text-align: center;
+            border-radius: 12px;
+            padding: 16px;
             background-color: var(--bg-color);
-            color: var(--text-secondary);
-            cursor: not-allowed;
-            outline: none;
             box-sizing: border-box;
             width: 100%;
-            height: 120px;
-            transition: all 0.2s cubic-bezier(0.25, 0.8, 0.25, 1);
+            height: 160px;
             display: flex;
             flex-direction: column;
-            justify-content: center;
+            justify-content: space-between;
             align-items: center;
+            transition: all 0.2s cubic-bezier(0.25, 0.8, 0.25, 1);
         }
 
-        #paste-box.ready {
-            border-color: var(--border-color);
-            cursor: pointer;
-        }
-
-        #paste-box.ready:hover {
-            background-color: var(--bg-hover);
-            border-color: var(--text-secondary);
-        }
-
-        #paste-box.ready:focus {
-            border-color: var(--accent-color);
-            box-shadow: 0 0 0 1px var(--accent-color);
-        }
-
-        #paste-box.dragover {
+        #paste-container.dragover {
             background-color: var(--bg-hover) !important;
             border-color: var(--accent-color) !important;
             border-style: solid !important;
         }
 
-        .title {
-            font-size: 14px;
-            font-weight: 600;
-            color: var(--text-color);
-            margin-bottom: 4px;
+        .button-group {
+            display: flex;
+            gap: 12px;
+            width: 100%;
+            justify-content: center;
         }
 
-        .subtitle {
-            font-size: 11px;
+        .btn {
+            flex: 1;
+            max-width: 220px;
+            height: 38px;
+            border-radius: 8px;
+            border: none;
+            font-size: 13px;
+            font-weight: 600;
+            cursor: not-allowed;
+            opacity: 0.5;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 6px;
+            transition: all 0.15s ease;
+            outline: none;
+            color: #ffffff;
+        }
+
+        .btn-primary {
+            background-color: var(--accent-color);
+        }
+
+        .btn-secondary {
+            background-color: #3a3a3c;
+            border: 1px solid #48484a;
+        }
+
+        .ready .btn {
+            cursor: pointer;
+            opacity: 1;
+        }
+
+        .ready .btn-primary:hover {
+            background-color: var(--accent-hover);
+        }
+
+        .ready .btn-primary:active {
+            background-color: var(--accent-active);
+            transform: scale(0.98);
+        }
+
+        .ready .btn-secondary:hover {
+            background-color: #48484a;
+        }
+
+        .ready .btn-secondary:active {
+            background-color: #3a3a3c;
+            transform: scale(0.98);
+        }
+
+        #paste-area {
+            width: 100%;
+            height: 46px;
+            background-color: #2c2c2e;
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            box-sizing: border-box;
+            padding: 12px;
+            font-size: 12px;
             color: var(--text-secondary);
+            text-align: center;
+            outline: none;
+            overflow: hidden;
+            white-space: nowrap;
+            cursor: not-allowed;
+            user-select: none;
+            transition: all 0.15s ease;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+
+        .ready #paste-area {
+            cursor: text;
+            user-select: text;
+        }
+
+        .ready #paste-area:focus {
+            border-color: var(--accent-color);
+            color: var(--text-color);
+            background-color: #3a3a3c;
+            box-shadow: 0 0 0 1px var(--accent-color);
+        }
+
+        /* プレースホルダー風の表示を実現 */
+        #paste-area:empty::before {
+            content: attr(placeholder);
+            color: var(--text-secondary);
+            pointer-events: none;
         }
 
         #status-indicator {
             font-size: 10px;
-            margin-top: 8px;
             color: #ff453a; /* Apple System Red */
             font-weight: 500;
-            text-transform: uppercase;
             letter-spacing: 0.05em;
+            text-align: center;
+            margin-top: 4px;
         }
 
         #status-indicator.ready {
@@ -89,16 +161,33 @@
     </style>
 </head>
 <body>
-    <div id="paste-box" tabindex="0">
-        <div class="title">Initializing connection</div>
-        <div class="subtitle">Please wait for establishing communication...</div>
-        <div id="status-indicator">Disconnected</div>
+    <div id="paste-container">
+        <div class="button-group">
+            <button id="btn-paste-api" class="btn btn-primary" type="button" disabled>
+                📋 クリップボードから貼付け
+            </button>
+            <button id="btn-select-file" class="btn btn-secondary" type="button" disabled>
+                📷 ファイル/カメラから選択
+            </button>
+        </div>
+
+        <input type="file" id="hidden-file-input" accept="image/*" style="display: none;">
+
+        <div id="paste-area" tabindex="0" placeholder="または、ここを長押し（タップ）して貼り付け"></div>
+        
+        <div id="status-indicator">システム初期化中...</div>
     </div>
 
     <script>
-        console.log("[PasteBridge] Loading PasteBridge. Initializing...");
+        console.log("[PasteBridge] Loading PasteBridge (Mobile Friendly Edition). Initializing...");
 
-        const pasteBox = document.getElementById('paste-box');
+        const pasteContainer = document.getElementById('paste-container');
+        const btnPasteApi = document.getElementById('btn-paste-api');
+        const btnSelectFile = document.getElementById('btn-select-file');
+        const hiddenFileInput = document.getElementById('hidden-file-input');
+        const pasteArea = document.getElementById('paste-area');
+        const statusIndicator = document.getElementById('status-indicator');
+
         let isReady = false;
 
         function sendMessageToStreamlit(type, payload = {}) {
@@ -117,51 +206,84 @@
                 if (!isReady) {
                     isReady = true;
                     
-                    // UIをApple Proミニマリズム仕様でアクティブ化
-                    pasteBox.className = "ready";
-                    pasteBox.innerHTML = `
-                        <div class="title">Click here and press Ctrl + V to paste image</div>
-                        <div class="subtitle">Or drag and drop the image file directly here</div>
-                        <div id="status-indicator" class="ready">Ready to paste</div>
-                    `;
+                    // UIをアクティブ化
+                    pasteContainer.className = "ready";
+                    btnPasteApi.removeAttribute("disabled");
+                    btnSelectFile.removeAttribute("disabled");
+                    pasteArea.setAttribute("contenteditable", "true");
                     
-                    sendMessageToStreamlit("streamlit:setFrameHeight", { height: 120 });
+                    statusIndicator.className = "ready";
+                    statusIndicator.innerText = "接続完了：貼り付け準備完了";
+                    
+                    // モバイル向けに高さを160pxに拡張
+                    sendMessageToStreamlit("streamlit:setFrameHeight", { height: 160 });
                     attachEvents();
                 }
             }
         });
 
         function attachEvents() {
-            const activePasteBox = document.getElementById('paste-box');
-            
-            activePasteBox.addEventListener('click', () => {
-                activePasteBox.focus();
-            });
-            
-            activePasteBox.addEventListener('dragover', (e) => {
-                e.preventDefault();
-                if (isReady) {
-                    activePasteBox.classList.add('dragover');
-                }
-            });
-            
-            activePasteBox.addEventListener('dragleave', () => {
-                if (isReady) {
-                    activePasteBox.classList.remove('dragover');
-                }
-            });
-            
-            activePasteBox.addEventListener('drop', (e) => {
-                e.preventDefault();
+            // 1. クリップボードAPI経由での貼付けボタン
+            btnPasteApi.addEventListener('click', async () => {
                 if (!isReady) return;
-                activePasteBox.classList.remove('dragover');
-                if (e.dataTransfer.files.length > 0) {
-                    handleFile(e.dataTransfer.files[0]);
+                
+                statusIndicator.innerText = "クリップボードの読み取り中...";
+                statusIndicator.className = "";
+                
+                try {
+                    // Clipboard API を呼び出す
+                    if (!navigator.clipboard || !navigator.clipboard.read) {
+                        throw new Error("ブラウザがクリップボード画像読み取りAPIに対応していないか、HTTP接続のため制限されています。");
+                    }
+                    
+                    const items = await navigator.clipboard.read();
+                    let imageFound = false;
+                    
+                    for (const item of items) {
+                        for (const type of item.types) {
+                            if (type.startsWith('image/')) {
+                                const blob = await item.getType(type);
+                                handleFile(blob);
+                                imageFound = true;
+                                break;
+                            }
+                        }
+                        if (imageFound) break;
+                    }
+                    
+                    if (!imageFound) {
+                        alert("クリップボードに画像が見つかりませんでした。先にゲーム等のスクリーンショットをコピーしてください。");
+                        resetStatus();
+                    }
+                } catch (err) {
+                    console.error("[PasteBridge] Clipboard API Error: ", err);
+                    alert("クリップボードから直接貼り付けられませんでした。\n非HTTPS環境であるか、権限がありません。\n\n【解決策】\n下のテキスト領域を長押しして「貼り付け」するか、「ファイル/カメラから選択」ボタンをご利用ください。");
+                    resetStatus();
                 }
             });
 
-            activePasteBox.addEventListener('paste', (e) => {
+            // 2. インラインファイル/カメラアップローダーボタン
+            btnSelectFile.addEventListener('click', () => {
                 if (!isReady) return;
+                hiddenFileInput.click();
+            });
+
+            hiddenFileInput.addEventListener('change', (e) => {
+                if (e.target.files.length > 0) {
+                    handleFile(e.target.files[0]);
+                }
+            });
+
+            // 3. 長押し・キーボードペースト用エリア
+            pasteArea.addEventListener('click', () => {
+                if (isReady) {
+                    pasteArea.focus();
+                }
+            });
+
+            pasteArea.addEventListener('paste', (e) => {
+                if (!isReady) return;
+                
                 const items = (e.clipboardData || window.clipboardData).items;
                 let imageFound = false;
                 
@@ -174,34 +296,66 @@
                         break;
                     }
                 }
+                
+                // テキストが入力されてしまうのを防ぐためのガード
+                setTimeout(() => {
+                    pasteArea.innerHTML = "";
+                }, 50);
+            });
+
+            // 4. デスクトップ用ドラッグ＆ドロップ
+            pasteContainer.addEventListener('dragover', (e) => {
+                e.preventDefault();
+                if (isReady) {
+                    pasteContainer.classList.add('dragover');
+                }
+            });
+
+            pasteContainer.addEventListener('dragleave', () => {
+                if (isReady) {
+                    pasteContainer.classList.remove('dragover');
+                }
+            });
+
+            pasteContainer.addEventListener('drop', (e) => {
+                e.preventDefault();
+                if (!isReady) return;
+                pasteContainer.classList.remove('dragover');
+                if (e.dataTransfer.files.length > 0) {
+                    handleFile(e.dataTransfer.files[0]);
+                }
             });
         }
 
-        function handleFile(file) {
+        function handleFile(fileOrBlob) {
             const reader = new FileReader();
             reader.onload = function(event) {
                 const base64Data = event.target.result;
+                // Streamlit側にBase64画像データを送信
                 sendMessageToStreamlit("streamlit:setComponentValue", { value: base64Data });
                 
-                const activePasteBox = document.getElementById('paste-box');
-                activePasteBox.innerHTML = `
-                    <div class="title" style="color: #30d158;">Successfully loaded</div>
-                    <div class="subtitle">Image has been transferred to reader system</div>
-                    <div id="status-indicator" class="ready">Ready to paste</div>
-                `;
+                statusIndicator.style.color = "#30d158";
+                statusIndicator.innerText = "画像を正常にロードしました";
+                
+                // 一時的にボタンやテキストに完了メッセージを表示
+                const originalPlaceholder = pasteArea.getAttribute("placeholder");
+                pasteArea.setAttribute("placeholder", "読み込み成功！読み取り結果を解析しています...");
                 
                 setTimeout(() => {
-                    if (isReady) {
-                        activePasteBox.innerHTML = `
-                            <div class="title">Click here and press Ctrl + V to paste image</div>
-                            <div class="subtitle">Or drag and drop the image file directly here</div>
-                            <div id="status-indicator" class="ready">Ready to paste</div>
-                        `;
-                    }
+                    resetStatus();
+                    pasteArea.setAttribute("placeholder", originalPlaceholder);
                 }, 2000);
             };
             
-            reader.readAsDataURL(file);
+            reader.readAsDataURL(fileOrBlob);
+        }
+
+        function resetStatus() {
+            if (isReady) {
+                statusIndicator.style.color = "";
+                statusIndicator.className = "ready";
+                statusIndicator.innerText = "接続完了：貼り付け準備完了";
+            }
         }
 
         initializeConnection();
