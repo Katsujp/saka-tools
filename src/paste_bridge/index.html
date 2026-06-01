@@ -331,8 +331,13 @@
             const reader = new FileReader();
             reader.onload = function(event) {
                 const base64Data = event.target.result;
-                // Streamlit側にBase64画像データを送信
-                sendMessageToStreamlit("streamlit:setComponentValue", { value: base64Data });
+                // Streamlit側にワンタイムID付きで送信し、状態残留による二重ロード競合を根本防止
+                sendMessageToStreamlit("streamlit:setComponentValue", { 
+                    value: {
+                        id: "paste_" + Date.now() + "_" + Math.random().toString(36).substr(2, 9),
+                        data: base64Data
+                    }
+                });
                 
                 statusIndicator.style.color = "#30d158";
                 statusIndicator.innerText = "画像を正常にロードしました";

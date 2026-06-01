@@ -270,43 +270,25 @@ st.markdown('<div class="subtitle">選手のパラメータタブの中身を読
 st.markdown('<div class="apple-card">', unsafe_allow_html=True)
 st.subheader("画像ソースのロード")
 
-tab_paste, tab_upload = st.tabs(["クリップボードからペースト", "画像ファイルアップロード"])
+st.write("下の貼り付けパネルを使用して、クリップボードからの貼り付け、または画像ファイルを選択してください。")
 
-# アップローダーの画像取得
-with tab_upload:
-    uploaded_files = st.file_uploader(
-        "パラメータ画面のスクリーンショットを選択",
-        type=["png", "jpg", "jpeg", "webp"],
-        accept_multiple_files=True,
-        key="file_uploader_instance"
-    )
-    if uploaded_files:
-        for file in uploaded_files:
-            img = Image.open(file)
-            if not any(name == file.name for name, _ in st.session_state.target_images):
-                # ロードと同時にあらかじめ高精度自動トリミング・1920x1080正規化を完了させ、完全に一本化
-                normalized_img = normalize_and_convert_to_pil(img, st.session_state.ocr_engine)
-                st.session_state.target_images.append((file.name, normalized_img))
-        st.success(f"画像をロードおよび高精度正規化トリミング処理しました (現在合計: {len(st.session_state.target_images)}枚)")
+# ペーストブリッジカスタムコンポーネント
+import streamlit.components.v1 as components
+parent_dir = os.path.dirname(os.path.abspath(__file__))
+paste_bridge_dir = os.path.join(parent_dir, "src", "paste_bridge")
+paste_bridge = components.declare_component("paste_bridge", path=paste_bridge_dir)
 
-# クリップボードからのペースト
-with tab_paste:
-    st.write("ゲーム中の選手パラメータ画面でキャプチャをコピーし、下のフォームをクリックして Ctrl + V キーを押してください。")
+if "last_paste_id" not in st.session_state:
+    st.session_state.last_paste_id = None
     
-    # ペーストブリッジカスタムコンポーネント
-    import streamlit.components.v1 as components
-    parent_dir = os.path.dirname(os.path.abspath(__file__))
-    paste_bridge_dir = os.path.join(parent_dir, "src", "paste_bridge")
-    paste_bridge = components.declare_component("paste_bridge", path=paste_bridge_dir)
+pasted_obj = paste_bridge(key="paste_bridge_instance")
+
+if pasted_obj and isinstance(pasted_obj, dict):
+    paste_id = pasted_obj.get("id")
+    base64_str = pasted_obj.get("data", "")
     
-    if "last_pasted_base64" not in st.session_state:
-        st.session_state.last_pasted_base64 = None
-        
-    pasted_base64 = paste_bridge(key="paste_bridge_instance")
-    
-    if pasted_base64 and pasted_base64 != st.session_state.last_pasted_base64:
+    if paste_id and paste_id != st.session_state.last_paste_id:
         try:
-            base64_str = pasted_base64
             if "," in base64_str:
                 base64_str = base64_str.split(",")[1]
             
@@ -319,9 +301,9 @@ with tab_paste:
             
             clip_name = f"Clipboard_{int(time.time())}"
             st.session_state.target_images.append((clip_name, normalized_img))
-            st.session_state.last_pasted_base64 = pasted_base64
+            st.session_state.last_paste_id = paste_id
             
-            st.success("クリップボードから画像を取得および高精度トリミング処理しました。")
+            st.success("画像を取得および高精度トリミング処理しました。")
             st.rerun()
         except Exception as e_dec:
             st.error(f"画像のデコード中にエラーが発生しました: {e_dec}")
@@ -330,13 +312,31 @@ st.markdown('</div>', unsafe_allow_html=True)
 # 2. クライアントサイド完全リアルタイム調整Canvas HUDのロード
 if st.session_state.target_images:
     st.markdown('<div class="apple-card">', unsafe_allow_html=True)
-    st.subheader("高精度座標フィッティング & リアルタイムプレビュー")
-    st.write("右側のスライダーを操作すると、ブラウザ側で遅延なく完全に滑らかに枠線が動きます。枠が数値エリアに重なるよう調整してください。")
+    st.subheader("読取りエリア調整プレビュー")
+    st.write("右側のスライダーを操作して、枠が数値エリアに重なるよう調整してください。")
     
     # 対象画像のセレクトボックス
     img_names = [name for name, _ in st.session_state.target_images]
     selected_img_name = st.selectbox("プレビュー対象画像", img_names)
-    selected_pil = [img for name, img in st.session_state.target_images if name == selected_img_name][0]
+    
+    # 選択中の画像を個別クリアするボタン
+    if st.button("選択中の画像をクリアする", use_container_width=True):
+        st.session_state.target_images = [
+            (name, img) for name, img in st.session_state.target_images if name != selected_img_name
+        ]
+        st.success(f"画像「{selected_img_name}」をクリアしました。")
+        time.sleep(0.5)
+        st.rerun()
+        
+    # 安全なPIL画像抽出 (削除処理直後のインデックスエラーを完全に防止)
+    matching_pils = [img for name, img in st.session_state.target_images if name == selected_img_name]
+    if not matching_pils:
+        if st.session_state.target_images:
+            selected_pil = st.session_state.target_images[0][1]
+        else:
+            st.rerun()
+    else:
+        selected_pil = matching_pils[0]
     
     # すでにトリミング・正規化済みのPIL画像のBase64 Data URIを取得（フロント/バックの座標完全統合）
     image_uri = get_image_base64(selected_pil)
@@ -723,9 +723,9 @@ if st.session_state.parsed_results:
         
     st.markdown('</div>', unsafe_allow_html=True)
 
-    # 4. Apple Numbers風「超速コピペステーション」
+    # 4. Apple Numbers風「コピペステーション」
     st.markdown('<div class="apple-card">', unsafe_allow_html=True)
-    st.subheader("超速コピペステーション")
+    st.subheader("コピペステーション")
     st.write("「コピペステーションに展開する」ボタンを押すと、チェックを入れた選択行のみが現在の並び順通りに出力されます。")
     
     col_horizontal, col_vertical = st.columns(2)
