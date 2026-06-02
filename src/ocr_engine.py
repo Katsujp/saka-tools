@@ -14,6 +14,9 @@ from PIL import Image
 from src.config import BASE_WIDTH, BASE_HEIGHT, BASIC_INFO_ROIS, MAIN_PARAM_ROIS, DETAIL_PARAM_ROIS, PARAM_LABELS, DEFAULT_ROIS, GROUPS, GK_ALIASES
 
 
+import tempfile
+import os
+
 class SakatsukuOCREngine:
     """サカつく2026のパラメータ画面を解析するOCRエンジンクラス。"""
     
@@ -21,11 +24,15 @@ class SakatsukuOCREngine:
         """OCRエンジンおよび言語モデルの初期化を行います。"""
         # マルチスレッド環境下でのCUDA競合を防ぐためのロックオブジェクト
         self.lock = threading.Lock()
-        # 英語・日本語の読み取りに対応したEasyOCRのリーダーを初期化 (GPUがあれば自動使用)
-        # verbose=Falseを指定することで、初回ダウンロード時のコンソールでのUnicodeEncodeErrorを回避します
-        self.reader = easyocr.Reader(['ja', 'en'], gpu=True, verbose=False)
-        # 英語専用（数値およびアルファベット項目）のリーダーを初期化し、日本語モデルとの干渉（0の消失など）を100%防止！
-        self.reader_en = easyocr.Reader(['en'], gpu=True, verbose=False)
+        
+        # OS非依存で確実に書き込み可能な一時フォルダ（Linux環境なら/tmp）配下にモデル専用ディレクトリを作成
+        model_dir = os.path.join(tempfile.gettempdir(), "easyocr_models")
+        os.makedirs(model_dir, exist_ok=True)
+        
+        # 英語・日本語の読み取りに対応したEasyOCRのリーダーを初期化 (一時フォルダを指定)
+        self.reader = easyocr.Reader(['ja', 'en'], gpu=True, verbose=False, model_storage_dir=model_dir)
+        # 英語専用（数値およびアルファベット項目）のリーダーを初期化し、日本語モデルとの干渉を防止 (一時フォルダを指定)
+        self.reader_en = easyocr.Reader(['en'], gpu=True, verbose=False, model_storage_dir=model_dir)
 
     def scan_game_boundary(self, img):
         """画像外周の輝度・色差変化を縦横スキャンし、ゲーム画面の正確な4辺座標を1px単位で自動検出します。"""

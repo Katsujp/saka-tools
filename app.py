@@ -11,33 +11,35 @@ FP/GKロール切り替え、縦横展開対応コピペステーション、Goo
 # =====================================================================
 import sys
 import ctypes
-
-try:
-    # OSによるスケーリング介入を無効化し、Per-Monitor DPI Awareに設定して画像のボケを防止
-    ctypes.windll.shcore.SetProcessDpiAwareness(2) # PROCESS_PER_MONITOR_DPI_AWARE
-except Exception:
-    try:
-        ctypes.windll.user32.SetProcessDPIAware()
-    except Exception:
-        pass
-
 import ssl
 import urllib.request
+import platform
 
-# 1. すべての標準出力における cp932 エンコードエラーによるクラッシュを防止
-if hasattr(sys.stdout, 'reconfigure'):
-    sys.stdout.reconfigure(errors='replace')
-if hasattr(sys.stderr, 'reconfigure'):
-    sys.stderr.reconfigure(errors='replace')
-
-# 2. EasyOCRのダウンロード進捗バー(\u2588)を強制的に無効化
-original_urlretrieve = urllib.request.urlretrieve
-def patched_urlretrieve(url, filename=None, reporthook=None, data=None):
-    return original_urlretrieve(url, filename, reporthook=None, data=data)
-urllib.request.urlretrieve = patched_urlretrieve
-
-# 3. SSLルート証明書エラーによるダウンロード異常終了を防止
+# 1. SSLルート証明書エラーによるダウンロード異常終了を防止 (環境を問わず安全のために適用)
 ssl._create_default_https_context = ssl._create_unverified_context
+
+# 2. Windows環境固有のDPI設定およびエンコードエラー防止パッチの適用
+if platform.system() == "Windows":
+    try:
+        # OSによるスケーリング介入を無効化し、Per-Monitor DPI Awareに設定して画像のボケを防止
+        ctypes.windll.shcore.SetProcessDpiAwareness(2) # PROCESS_PER_MONITOR_DPI_AWARE
+    except Exception:
+        try:
+            ctypes.windll.user32.SetProcessDPIAware()
+        except Exception:
+            pass
+
+    # すべての標準出力における cp932 エンコードエラーによるクラッシュを防止
+    if hasattr(sys.stdout, 'reconfigure'):
+        sys.stdout.reconfigure(errors='replace')
+    if hasattr(sys.stderr, 'reconfigure'):
+        sys.stderr.reconfigure(errors='replace')
+
+    # EasyOCRのダウンロード進捗バー(\u2588)を強制的に無効化 (Windowsコマンドプロンプトのエンコードクラッシュ防止)
+    original_urlretrieve = urllib.request.urlretrieve
+    def patched_urlretrieve(url, filename=None, reporthook=None, data=None):
+        return original_urlretrieve(url, filename, reporthook=None, data=data)
+    urllib.request.urlretrieve = patched_urlretrieve
 # =====================================================================
 
 import json
