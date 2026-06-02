@@ -503,7 +503,8 @@
         group_scales: {},
         individual_offsets: {},
         individual_scales: {},
-        last_debug_log: "" // 最新の操作ログを保持
+        last_debug_log: "", // 最新の操作ログを保持
+        restore_sync_id: "" // 設定復元同期用のID
     };
 
     // 直前に送信した最新の状態のキャッシュ (非同期上書き戻りバグを完全封殺するためのローカル権限キャッシュ)
@@ -1231,6 +1232,15 @@
                     };
                 }
 
+                // 1.5 親からの設定復元シグナルのチェックとキャッシュ強制破棄
+                let restoreTriggered = false;
+                if (args.restore_sync_id !== undefined && args.restore_sync_id !== state.restore_sync_id) {
+                    state.restore_sync_id = args.restore_sync_id;
+                    // 送信キャッシュを強制的に完全破棄し、逆同期ガードを一時的に完全解除！
+                    lastSentState = null;
+                    restoreTriggered = true;
+                }
+
                 // 2. 親から渡された現在のアライメント調整状態の逆同期
                 let stateChanged = false;
                 if (args.is_gk !== undefined && state.isGk !== args.is_gk) {
@@ -1412,8 +1422,8 @@
                 }
 
                 // 状態変更があった場合、または初回ロード時にUIコンポーネントを再描画
-                if (!imageLoaded) {
-                    setupItemsGrid();
+                if (restoreTriggered || !imageLoaded) {
+                    setupItemsGrid(); // 復元時、または初回画像ロード時はUIを全再生成して同期
                 } else if (stateChanged || groupChanged || indivChanged) {
                     // 親からの逆同期時は、DOM全破壊（innerHTML=""）を完全に廃止し、値のみをピンポイントで動的に同期！
                     updateAlignmentUIValues();

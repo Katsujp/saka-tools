@@ -242,6 +242,122 @@ if "tsv_horizontal" not in st.session_state:
     st.session_state.tsv_horizontal = ""
 if "tsv_vertical" not in st.session_state:
     st.session_state.tsv_vertical = ""
+if "restore_sync_id" not in st.session_state:
+    st.session_state.restore_sync_id = ""
+
+
+# =====================================================================
+# JSONアライメント設定上書き確認 & 復元バグ修正ヘルパー関数
+# =====================================================================
+def is_session_modified():
+    """現在の座標調整パラメータが初期状態から変更（調整）されているかを正確に判定します。"""
+    # 1. 全体アライメントのチェック
+    if st.session_state.get("global_scale_x", 1.0) != 1.0 or st.session_state.get("global_scale_y", 1.0) != 1.0:
+        return True
+    if st.session_state.get("global_offset_x", 0) != 0 or st.session_state.get("global_offset_y", 0) != 0:
+        return True
+    if st.session_state.get("is_gk", False):
+        return True
+        
+    # 2. 有効読取り項目のチェック (デフォルトは全項目選択状態)
+    default_items = list(DEFAULT_ROIS.keys())
+    active = st.session_state.get("active_items", [])
+    if len(active) != len(default_items) or not all(x in active for x in default_items):
+        return True
+        
+    # 3. グループアライメントのチェック
+    group_offsets = st.session_state.get("group_offsets", {})
+    group_scales = st.session_state.get("group_scales", {})
+    for grp, offset in group_offsets.items():
+        if offset != [0, 0]:
+            return True
+    for grp, scale in group_scales.items():
+        if scale != [1.0, 1.0]:
+            return True
+            
+    # 4. 個別パラメータアライメントのチェック
+    indiv_offsets = st.session_state.get("individual_offsets", {})
+    indiv_scales = st.session_state.get("individual_scales", {})
+    for item, offset in indiv_offsets.items():
+        if offset != [0, 0]:
+            return True
+    for item, scale in indiv_scales.items():
+        if scale != [1.0, 1.0]:
+            return True
+            
+    return False
+
+def apply_config_to_session(config_data):
+    """JSON設定ファイルの内容をセッション状態へ一括上書き適用します。"""
+    st.session_state.global_scale_x = config_data.get("global_scale_x", 1.0)
+    st.session_state.global_scale_y = config_data.get("global_scale_y", 1.0)
+    st.session_state.global_offset_x = config_data.get("global_offset_x", 0)
+    st.session_state.global_offset_y = config_data.get("global_offset_y", 0)
+    
+    all_rois = list(DEFAULT_ROIS.keys()) + ["セービング", "反応速度", "1対1"]
+    uploaded_ind_offsets = config_data.get("individual_offsets", {})
+    uploaded_ind_scales = config_data.get("individual_scales", {})
+    
+    st.session_state.individual_offsets = {
+        item: uploaded_ind_offsets.get(item, [0, 0]) for item in all_rois
+    }
+    st.session_state.individual_scales = {
+        item: uploaded_ind_scales.get(item, [1.0, 1.0]) for item in all_rois
+    }
+    
+    uploaded_grp_offsets = config_data.get("group_offsets", {})
+    uploaded_grp_scales = config_data.get("group_scales", {})
+    
+    st.session_state.group_offsets = {
+        grp: uploaded_grp_offsets.get(grp, [0, 0]) for grp in GROUPS.keys()
+    }
+    st.session_state.group_scales = {
+        grp: uploaded_grp_scales.get(grp, [1.0, 1.0]) for grp in GROUPS.keys()
+    }
+    
+    st.session_state.is_gk = config_data.get("is_gk", False)
+    st.session_state.active_items = config_data.get("active_items", [])
+    
+    # すべての個別パラメータと大項目を完全に網羅して同期 (同期漏れバグを構造的に100%封殺！)
+    js_ind_offsets = config_data.get("individual_offsets", {})
+    js_ind_scales = config_data.get("individual_scales", {})
+    for item in all_rois:
+        if item in js_ind_offsets:
+            st.session_state.individual_offsets[item] = js_ind_offsets[item]
+        if item in js_ind_scales:
+            st.session_state.individual_scales[item] = js_ind_scales[item]
+            
+    # OCR実行完了フラグをリセットし、重複排除用のIDもクリアする
+    st.session_state.ocr_run_completed = False
+    if "last_processed_msg_id" in st.session_state:
+        st.session_state.last_processed_msg_id = None
+        
+    # JS側に「復元が行われた」ことを強制リセットでシグナル通知するためのワンタイムIDを発行！
+    st.session_state.restore_sync_id = f"restore_{int(time.time())}"
+
+
+# Streamlitネイティブの st.dialog が利用可能な場合は美しい確認モーダルを定義
+if hasattr(st, "dialog"):
+    @st.dialog("アライメント設定上書きの確認", width="large")
+    def confirm_overwrite_dialog(config_data):
+        st.markdown("<p style='font-size: 15px; color: #ff453a; font-weight: 600; margin-top: 5px; margin-bottom: 12px;'>⚠️ 調整途中の変更データが存在します</p>", unsafe_allow_html=True)
+        st.write("すでに読取り領域や有効な項目の調整が行われています。設定ファイルをロードすると、現在の微調整内容はすべて上書き破棄されますが、本当によろしいですか？")
+        st.markdown("<div style='margin-bottom: 25px;'></div>", unsafe_allow_html=True)
+        
+        col_yes, col_no = st.columns(2)
+        with col_yes:
+            if st.button("はい、設定をロードします", key="btn_confirm_overwrite_yes", use_container_width=True):
+                apply_config_to_session(config_data)
+                # アップローダーを強制リセットしてクリア
+                st.session_state.uploader_key = f"restore_uploader_{int(time.time())}"
+                st.success("設定ファイルを正常にロードし、アライメントを更新しました！")
+                time.sleep(0.8)
+                st.rerun()
+        with col_no:
+            if st.button("キャンセル", key="btn_confirm_overwrite_no", use_container_width=True):
+                st.session_state.uploader_key = f"restore_uploader_{int(time.time())}"
+                st.rerun()
+# =====================================================================
 
 
 
@@ -363,7 +479,8 @@ if st.session_state.target_images:
         group_scales=st.session_state.group_scales,
         group_offsets=st.session_state.group_offsets,
         individual_scales=st.session_state.individual_scales,
-        individual_offsets=st.session_state.individual_offsets
+        individual_offsets=st.session_state.individual_offsets,
+        restore_sync_id=st.session_state.get("restore_sync_id", "")  # JS側のガードを一時解除する復元シグナルを転送！
     )
     
     # アライメント位置情報のローカル保存・復元機能
@@ -400,54 +517,38 @@ if st.session_state.target_images:
         if uploaded_config is not None:
             try:
                 config_data = json.load(uploaded_config)
-                st.session_state.global_scale_x = config_data.get("global_scale_x", 1.0)
-                st.session_state.global_scale_y = config_data.get("global_scale_y", 1.0)
-                st.session_state.global_offset_x = config_data.get("global_offset_x", 0)
-                st.session_state.global_offset_y = config_data.get("global_offset_y", 0)
                 
-                # 安全なマッピング取得と補完 (キーの欠落によるバグをフォールバック付きで完全防止)
-                all_rois = list(DEFAULT_ROIS.keys()) + ["セービング", "反応速度", "1対1"]
-                uploaded_ind_offsets = config_data.get("individual_offsets", {})
-                uploaded_ind_scales = config_data.get("individual_scales", {})
-                st.session_state.individual_offsets = {
-                    item: uploaded_ind_offsets.get(item, [0, 0]) for item in all_rois
-                }
-                st.session_state.individual_scales = {
-                    item: uploaded_ind_scales.get(item, [1.0, 1.0]) for item in all_rois
-                }
-                
-                uploaded_grp_offsets = config_data.get("group_offsets", {})
-                uploaded_grp_scales = config_data.get("group_scales", {})
-                st.session_state.group_offsets = {
-                    grp: uploaded_grp_offsets.get(grp, [0, 0]) for grp in GROUPS.keys()
-                }
-                st.session_state.group_scales = {
-                    grp: uploaded_grp_scales.get(grp, [1.0, 1.0]) for grp in GROUPS.keys()
-                }
-                
-                st.session_state.is_gk = config_data.get("is_gk", False)
-                st.session_state.active_items = config_data.get("active_items", [])
-                
-                # すべての個別パラメータと大項目を完全に網羅して同期 (同期漏れバグを構造的に100%封殺！)
-                all_rois = list(DEFAULT_ROIS.keys()) + ["セービング", "反応速度", "1対1"]
-                js_ind_offsets = config_data.get("individual_offsets", {})
-                js_ind_scales = config_data.get("individual_scales", {})
-                for item in all_rois:
-                    if item in js_ind_offsets:
-                        st.session_state.individual_offsets[item] = js_ind_offsets[item]
-                    if item in js_ind_scales:
-                        st.session_state.individual_scales[item] = js_ind_scales[item]
-                
-                # 復元時に ocr_run_completed も False に初期化し、重複排除用のIDもクリアする
-                st.session_state.ocr_run_completed = False
-                if "last_processed_msg_id" in st.session_state:
-                    st.session_state.last_processed_msg_id = None
-                
-                # キーを動的に変更することで、file_uploader を強制的に空（クリア）にリセットして無限 rerun を根絶！
-                st.session_state.uploader_key = f"restore_uploader_{int(time.time())}"
-                st.success("アライメント設定をローカルファイルから復元しました！")
-                time.sleep(1)
-                st.rerun()
+                # すでに何らかのアライメント座標や項目の調整が行われているかを検証
+                if is_session_modified():
+                    # st.dialog モーダルがサポートされているかチェック
+                    if hasattr(st, "dialog"):
+                        confirm_overwrite_dialog(config_data)
+                    else:
+                        # 非サポートの古い Streamlit 環境向け: プレミアム感あふれるインライン警告警告 & 確認ボタン
+                        st.markdown("<div class='apple-card' style='border-color: #ff453a; padding: 15px; margin-top: 10px;'>", unsafe_allow_html=True)
+                        st.markdown("<p style='color: #ff453a; font-weight: 700; font-size: 13px; margin: 0 0 8px 0;'>⚠️ すでに調整データが存在します</p>", unsafe_allow_html=True)
+                        st.write("設定ファイルをロードすると現在の変更は上書き破棄されます。")
+                        
+                        col_inline_yes, col_inline_no = st.columns(2)
+                        with col_inline_yes:
+                            if st.button("はい、上書きします", key="btn_inline_yes", use_container_width=True):
+                                apply_config_to_session(config_data)
+                                st.session_state.uploader_key = f"restore_uploader_{int(time.time())}"
+                                st.success("設定をロードしました。")
+                                time.sleep(0.8)
+                                st.rerun()
+                        with col_inline_no:
+                            if st.button("キャンセル", key="btn_inline_no", use_container_width=True):
+                                st.session_state.uploader_key = f"restore_uploader_{int(time.time())}"
+                                st.rerun()
+                        st.markdown("</div>", unsafe_allow_html=True)
+                else:
+                    # 初期状態であれば、ダイアログ確認を挟まずに即座に上書き復元を適用
+                    apply_config_to_session(config_data)
+                    st.session_state.uploader_key = f"restore_uploader_{int(time.time())}"
+                    st.success("アライメント設定をローカルファイルから復元しました！")
+                    time.sleep(0.8)
+                    st.rerun()
             except Exception as e_cfg:
                 st.error(f"ファイル解析エラー: {e_cfg}")
                 
