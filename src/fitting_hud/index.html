@@ -316,6 +316,34 @@
         .action-button:active {
             background: #006adc;
         }
+
+        /* Appleスタイルの小さな微調整ステップボタン */
+        .step-btn {
+            background-color: #3a3a3c;
+            color: #ffffff;
+            border: none;
+            border-radius: 6px;
+            width: 28px;
+            height: 28px;
+            font-size: 14px;
+            font-weight: bold;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: background-color 0.15s ease, transform 0.1s ease;
+            user-select: none;
+            outline: none;
+        }
+
+        .step-btn:hover {
+            background-color: #48484a;
+        }
+
+        .step-btn:active {
+            background-color: #2c2c2e;
+            transform: scale(0.95);
+        }
     </style>
 </head>
 <body>
@@ -350,25 +378,33 @@
                 <div class="slider-row">
                     <div class="slider-header"><span>全体 X シフト</span><span class="slider-value" id="val_g_x">0 px</span></div>
                     <div class="slider-container">
+                        <button class="step-btn" onclick="stepParam('g_x', -1)" tabindex="-1">−</button>
                         <input type="range" class="apple-slider" id="sld_g_x" min="-1920" max="1920" value="0" oninput="updateParam('g_x', this.value)" onchange="notifyStateChange()">
+                        <button class="step-btn" onclick="stepParam('g_x', 1)" tabindex="-1">+</button>
                     </div>
                 </div>
                 <div class="slider-row">
                     <div class="slider-header"><span>全体 Y シフト</span><span class="slider-value" id="val_g_y">0 px</span></div>
                     <div class="slider-container">
+                        <button class="step-btn" onclick="stepParam('g_y', -1)" tabindex="-1">−</button>
                         <input type="range" class="apple-slider" id="sld_g_y" min="-1080" max="1080" value="0" oninput="updateParam('g_y', this.value)" onchange="notifyStateChange()">
+                        <button class="step-btn" onclick="stepParam('g_y', 1)" tabindex="-1">+</button>
                     </div>
                 </div>
                 <div class="slider-row">
                     <div class="slider-header"><span>全体 X スケール (幅)</span><span class="slider-value" id="val_g_s_x">1.00 x</span></div>
                     <div class="slider-container">
+                        <button class="step-btn" onclick="stepParam('g_s_x', -1)" tabindex="-1">−</button>
                         <input type="range" class="apple-slider" id="sld_g_s_x" min="0.10" max="3.00" step="0.01" value="1.00" oninput="updateParam('g_s_x', this.value)" onchange="notifyStateChange()">
+                        <button class="step-btn" onclick="stepParam('g_s_x', 1)" tabindex="-1">+</button>
                     </div>
                 </div>
                 <div class="slider-row">
                     <div class="slider-header"><span>全体 Y スケール (高さ)</span><span class="slider-value" id="val_g_s_y">1.00 x</span></div>
                     <div class="slider-container">
+                        <button class="step-btn" onclick="stepParam('g_s_y', -1)" tabindex="-1">−</button>
                         <input type="range" class="apple-slider" id="sld_g_s_y" min="0.10" max="3.00" step="0.01" value="1.00" oninput="updateParam('g_s_y', this.value)" onchange="notifyStateChange()">
+                        <button class="step-btn" onclick="stepParam('g_s_y', 1)" tabindex="-1">+</button>
                     </div>
                 </div>
             </div>
@@ -669,25 +705,33 @@
                     <div class="slider-row">
                         <div class="slider-header"><span>全体 X シフト</span><span class="slider-value" id="val_grp_x_${grp}">${offX} px</span></div>
                         <div class="slider-container">
-                            <input type="range" class="apple-slider" min="-1920" max="1920" value="${offX}" oninput="updateGroupParam('${grp}', 'x', this.value)" onchange="notifyStateChange()">
+                            <button class="step-btn" onclick="stepGroupParam('${grp}', 'x', -1, 'sld_grp_x_${grp}')" tabindex="-1">−</button>
+                            <input type="range" class="apple-slider" id="sld_grp_x_${grp}" min="-1920" max="1920" value="${offX}" oninput="updateGroupParam('${grp}', 'x', this.value)" onchange="notifyStateChange()">
+                            <button class="step-btn" onclick="stepGroupParam('${grp}', 'x', 1, 'sld_grp_x_${grp}')" tabindex="-1">+</button>
                         </div>
                     </div>
                     <div class="slider-row">
                         <div class="slider-header"><span>全体 Y シフト</span><span class="slider-value" id="val_grp_y_${grp}">${offY} px</span></div>
                         <div class="slider-container">
-                            <input type="range" class="apple-slider" min="-1080" max="1080" value="${offY}" oninput="updateGroupParam('${grp}', 'y', this.value)" onchange="notifyStateChange()">
+                            <button class="step-btn" onclick="stepGroupParam('${grp}', 'y', -1, 'sld_grp_y_${grp}')" tabindex="-1">−</button>
+                            <input type="range" class="apple-slider" id="sld_grp_y_${grp}" min="-1080" max="1080" value="${offY}" oninput="updateGroupParam('${grp}', 'y', this.value)" onchange="notifyStateChange()">
+                            <button class="step-btn" onclick="stepGroupParam('${grp}', 'y', 1, 'sld_grp_y_${grp}')" tabindex="-1">+</button>
                         </div>
                     </div>
                     <div class="slider-row">
                         <div class="slider-header"><span>全体 X スケール (幅)</span><span class="slider-value" id="val_grp_s_x_${grp}">${sclX.toFixed(2)} x</span></div>
                         <div class="slider-container">
-                            <input type="range" class="apple-slider" min="0.10" max="3.00" step="0.01" value="${sclX}" oninput="updateGroupParam('${grp}', 's_x', this.value)" onchange="notifyStateChange()">
+                            <button class="step-btn" onclick="stepGroupParam('${grp}', 's_x', -1, 'sld_grp_s_x_${grp}')" tabindex="-1">−</button>
+                            <input type="range" class="apple-slider" id="sld_grp_s_x_${grp}" min="0.10" max="3.00" step="0.01" value="${sclX}" oninput="updateGroupParam('${grp}', 's_x', this.value)" onchange="notifyStateChange()">
+                            <button class="step-btn" onclick="stepGroupParam('${grp}', 's_x', 1, 'sld_grp_s_x_${grp}')" tabindex="-1">+</button>
                         </div>
                     </div>
                     <div class="slider-row">
                         <div class="slider-header"><span>全体 Y スケール (高さ)</span><span class="slider-value" id="val_grp_s_y_${grp}">${sclY.toFixed(2)} x</span></div>
                         <div class="slider-container">
-                            <input type="range" class="apple-slider" min="0.10" max="3.00" step="0.01" value="${sclY}" oninput="updateGroupParam('${grp}', 's_y', this.value)" onchange="notifyStateChange()">
+                            <button class="step-btn" onclick="stepGroupParam('${grp}', 's_y', -1, 'sld_grp_s_y_${grp}')" tabindex="-1">−</button>
+                            <input type="range" class="apple-slider" id="sld_grp_s_y_${grp}" min="0.10" max="3.00" step="0.01" value="${sclY}" oninput="updateGroupParam('${grp}', 's_y', this.value)" onchange="notifyStateChange()">
+                            <button class="step-btn" onclick="stepGroupParam('${grp}', 's_y', 1, 'sld_grp_s_y_${grp}')" tabindex="-1">+</button>
                         </div>
                     </div>
                 `;
@@ -726,25 +770,33 @@
                     <div class="slider-row">
                         <div class="slider-header"><span>個別 X シフト</span><span class="slider-value" id="val_ind_x_${dispItemName}">${offX} px</span></div>
                         <div class="slider-container">
-                            <input type="range" class="apple-slider" min="-1920" max="1920" value="${offX}" oninput="updateIndivParam('${dispItemName}', 'x', this.value)" onchange="notifyStateChange()">
+                            <button class="step-btn" onclick="stepIndivParam('${dispItemName}', 'x', -1, 'sld_ind_x_${dispItemName}')" tabindex="-1">−</button>
+                            <input type="range" class="apple-slider" id="sld_ind_x_${dispItemName}" min="-1920" max="1920" value="${offX}" oninput="updateIndivParam('${dispItemName}', 'x', this.value)" onchange="notifyStateChange()">
+                            <button class="step-btn" onclick="stepIndivParam('${dispItemName}', 'x', 1, 'sld_ind_x_${dispItemName}')" tabindex="-1">+</button>
                         </div>
                     </div>
                     <div class="slider-row">
                         <div class="slider-header"><span>個別 Y シフト</span><span class="slider-value" id="val_ind_y_${dispItemName}">${offY} px</span></div>
                         <div class="slider-container">
-                            <input type="range" class="apple-slider" min="-1080" max="1080" value="${offY}" oninput="updateIndivParam('${dispItemName}', 'y', this.value)" onchange="notifyStateChange()">
+                            <button class="step-btn" onclick="stepIndivParam('${dispItemName}', 'y', -1, 'sld_ind_y_${dispItemName}')" tabindex="-1">−</button>
+                            <input type="range" class="apple-slider" id="sld_ind_y_${dispItemName}" min="-1080" max="1080" value="${offY}" oninput="updateIndivParam('${dispItemName}', 'y', this.value)" onchange="notifyStateChange()">
+                            <button class="step-btn" onclick="stepIndivParam('${dispItemName}', 'y', 1, 'sld_ind_y_${dispItemName}')" tabindex="-1">+</button>
                         </div>
                     </div>
                     <div class="slider-row">
                         <div class="slider-header"><span>個別 X スケール</span><span class="slider-value" id="val_ind_s_x_${dispItemName}">${sclX.toFixed(2)} x</span></div>
                         <div class="slider-container">
-                            <input type="range" class="apple-slider" min="0.10" max="3.00" step="0.01" value="${sclX}" oninput="updateIndivParam('${dispItemName}', 's_x', this.value)" onchange="notifyStateChange()">
+                            <button class="step-btn" onclick="stepIndivParam('${dispItemName}', 's_x', -1, 'sld_ind_s_x_${dispItemName}')" tabindex="-1">−</button>
+                            <input type="range" class="apple-slider" id="sld_ind_s_x_${dispItemName}" min="0.10" max="3.00" step="0.01" value="${sclX}" oninput="updateIndivParam('${dispItemName}', 's_x', this.value)" onchange="notifyStateChange()">
+                            <button class="step-btn" onclick="stepIndivParam('${dispItemName}', 's_x', 1, 'sld_ind_s_x_${dispItemName}')" tabindex="-1">+</button>
                         </div>
                     </div>
                     <div class="slider-row">
                         <div class="slider-header"><span>個別 Y スケール</span><span class="slider-value" id="val_ind_s_y_${dispItemName}">${sclY.toFixed(2)} x</span></div>
                         <div class="slider-container">
-                            <input type="range" class="apple-slider" min="0.10" max="3.00" step="0.01" value="${sclY}" oninput="updateIndivParam('${dispItemName}', 's_y', this.value)" onchange="notifyStateChange()">
+                            <button class="step-btn" onclick="stepIndivParam('${dispItemName}', 's_y', -1, 'sld_ind_s_y_${dispItemName}')" tabindex="-1">−</button>
+                            <input type="range" class="apple-slider" id="sld_ind_s_y_${dispItemName}" min="0.10" max="3.00" step="0.01" value="${sclY}" oninput="updateIndivParam('${dispItemName}', 's_y', this.value)" onchange="notifyStateChange()">
+                            <button class="step-btn" onclick="stepIndivParam('${dispItemName}', 's_y', 1, 'sld_ind_s_y_${dispItemName}')" tabindex="-1">+</button>
                         </div>
                     </div>
                 `;
@@ -773,6 +825,39 @@
         state.last_debug_log = `JS: '${label}' shifted to ${formattedVal}${unit}`;
         
         redrawHUD();
+    }
+
+    // 全体パラメータ用のステップ微調整ボタン用関数
+    function stepParam(key, direction) {
+        const sld = document.getElementById(`sld_${key}`);
+        if (!sld) return;
+        const step = parseFloat(sld.step) || 1;
+        const newVal = Math.min(parseFloat(sld.max), Math.max(parseFloat(sld.min), parseFloat(sld.value) + (direction * step)));
+        sld.value = newVal;
+        updateParam(key, newVal);
+        notifyStateChange();
+    }
+
+    // グループ全体調整用のステップ微調整ボタン用関数
+    function stepGroupParam(grp, type, direction, elementId) {
+        const sld = document.getElementById(elementId);
+        if (!sld) return;
+        const step = parseFloat(sld.step) || 1;
+        const newVal = Math.min(parseFloat(sld.max), Math.max(parseFloat(sld.min), parseFloat(sld.value) + (direction * step)));
+        sld.value = newVal;
+        updateGroupParam(grp, type, newVal);
+        notifyStateChange();
+    }
+
+    // 個別微調整用のステップ微調整ボタン用関数
+    function stepIndivParam(item, type, direction, elementId) {
+        const sld = document.getElementById(elementId);
+        if (!sld) return;
+        const step = parseFloat(sld.step) || 1;
+        const newVal = Math.min(parseFloat(sld.max), Math.max(parseFloat(sld.min), parseFloat(sld.value) + (direction * step)));
+        sld.value = newVal;
+        updateIndivParam(item, type, newVal);
+        notifyStateChange();
     }
 
     function updateGroupParam(grp, type, value) {

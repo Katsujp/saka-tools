@@ -267,7 +267,7 @@ st.markdown('<div class="main-title">サカつく2026 パラメータOCRリー�
 st.markdown('<div class="subtitle">選手のパラメータタブの中身を読み取るツール</div>', unsafe_allow_html=True)
 
 # 1. 画像のインプットエリア
-st.markdown('<div class="apple-card">', unsafe_allow_html=True)
+st.markdown('<hr style="border: none; height: 4px; background-color: #3a3a3c; margin: 30px 0; border-radius: 2px;">', unsafe_allow_html=True)
 st.subheader("画像ソースのロード")
 
 st.write("下の貼り付けパネルを使用して、クリップボードからの貼り付け、または画像ファイルを選択してください。")
@@ -307,11 +307,10 @@ if pasted_obj and isinstance(pasted_obj, dict):
             st.rerun()
         except Exception as e_dec:
             st.error(f"画像のデコード中にエラーが発生しました: {e_dec}")
-st.markdown('</div>', unsafe_allow_html=True)
 
 # 2. クライアントサイド完全リアルタイム調整Canvas HUDのロード
 if st.session_state.target_images:
-    st.markdown('<div class="apple-card">', unsafe_allow_html=True)
+    st.markdown('<hr style="border: none; height: 4px; background-color: #3a3a3c; margin: 30px 0; border-radius: 2px;">', unsafe_allow_html=True)
     st.subheader("読取りエリア調整プレビュー")
     st.write("右側のスライダーを操作して、枠が数値エリアに重なるよう調整してください。")
     
@@ -597,11 +596,10 @@ if st.session_state.target_images:
                 st.session_state.ocr_run_completed = True  # OCR解析が完了したためフラグをTrueに設定し、二重実行をガード
                 log_status.update(label="すべての画像のOCR解析が完了しました。", state="complete", expanded=True)
                 st.success("解析結果テーブルを更新しました。画面の下部を確認してください。")
-st.markdown('</div>', unsafe_allow_html=True)
 
 # 3. 解析結果のプレビューと編集
 if st.session_state.parsed_results:
-    st.markdown('<div class="apple-card">', unsafe_allow_html=True)
+    st.markdown('<hr style="border: none; height: 4px; background-color: #3a3a3c; margin: 30px 0; border-radius: 2px;">', unsafe_allow_html=True)
     st.subheader("解析結果の確認と編集")
     st.write("数値を手動で編集する場合は、表のセルをダブルクリックして値を直接編集してください。")
     
@@ -721,10 +719,9 @@ if st.session_state.parsed_results:
         st.success("コピペステーションに選択データを展開しました！")
         st.rerun()
         
-    st.markdown('</div>', unsafe_allow_html=True)
 
     # 4. Apple Numbers風「コピペステーション」
-    st.markdown('<div class="apple-card">', unsafe_allow_html=True)
+    st.markdown('<hr style="border: none; height: 4px; background-color: #3a3a3c; margin: 30px 0; border-radius: 2px;">', unsafe_allow_html=True)
     st.subheader("コピペステーション")
     st.write("「コピペステーションに展開する」ボタンを押すと、チェックを入れた選択行のみが現在の並び順通りに出力されます。")
     
@@ -745,6 +742,5 @@ if st.session_state.parsed_results:
             st.code(st.session_state.tsv_vertical, language="tsv")
         else:
             st.info("データが展開されていません。上のボタンを押してください。")
-    st.markdown('</div>', unsafe_allow_html=True)
 
 

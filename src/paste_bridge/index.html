@@ -29,15 +29,16 @@
         #paste-container {
             border: 1px dashed var(--border-color);
             border-radius: 12px;
-            padding: 16px;
+            padding: 10px 16px;
             background-color: var(--bg-color);
             box-sizing: border-box;
             width: 100%;
-            height: 160px;
+            height: 80px;
             display: flex;
             flex-direction: column;
-            justify-content: space-between;
+            justify-content: center;
             align-items: center;
+            gap: 6px;
             transition: all 0.2s cubic-bezier(0.25, 0.8, 0.25, 1);
         }
 
@@ -105,47 +106,6 @@
             transform: scale(0.98);
         }
 
-        #paste-area {
-            width: 100%;
-            height: 46px;
-            background-color: #2c2c2e;
-            border: 1px solid var(--border-color);
-            border-radius: 8px;
-            box-sizing: border-box;
-            padding: 12px;
-            font-size: 12px;
-            color: var(--text-secondary);
-            text-align: center;
-            outline: none;
-            overflow: hidden;
-            white-space: nowrap;
-            cursor: not-allowed;
-            user-select: none;
-            transition: all 0.15s ease;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-        }
-
-        .ready #paste-area {
-            cursor: text;
-            user-select: text;
-        }
-
-        .ready #paste-area:focus {
-            border-color: var(--accent-color);
-            color: var(--text-color);
-            background-color: #3a3a3c;
-            box-shadow: 0 0 0 1px var(--accent-color);
-        }
-
-        /* プレースホルダー風の表示を実現 */
-        #paste-area:empty::before {
-            content: attr(placeholder);
-            color: var(--text-secondary);
-            pointer-events: none;
-        }
-
         #status-indicator {
             font-size: 10px;
             color: #ff453a; /* Apple System Red */
@@ -172,24 +132,22 @@
         </div>
 
         <input type="file" id="hidden-file-input" accept="image/*" style="display: none;">
-
-        <div id="paste-area" tabindex="0" placeholder="または、ここを長押し（タップ）して貼り付け"></div>
         
         <div id="status-indicator">システム初期化中...</div>
     </div>
 
     <script>
-        console.log("[PasteBridge] Loading PasteBridge (Mobile Friendly Edition). Initializing...");
+        console.log("[PasteBridge] Loading PasteBridge (Lightweight Edition). Initializing...");
 
         const pasteContainer = document.getElementById('paste-container');
         const btnPasteApi = document.getElementById('btn-paste-api');
         const btnSelectFile = document.getElementById('btn-select-file');
         const hiddenFileInput = document.getElementById('hidden-file-input');
-        const pasteArea = document.getElementById('paste-area');
         const statusIndicator = document.getElementById('status-indicator');
 
         let isReady = false;
 
+        // 親のStreamlit側にメッセージを送信するヘルパー関数
         function sendMessageToStreamlit(type, payload = {}) {
             window.parent.postMessage(Object.assign({
                 isStreamlitMessage: true,
@@ -197,33 +155,35 @@
             }, payload), "*");
         }
 
+        // 初期接続シーケンスの開始
         function initializeConnection() {
             sendMessageToStreamlit("streamlit:componentReady", { apiVersion: 1 });
         }
 
+        // Streamlitからのマウントシグナルを受信
         window.addEventListener("message", (event) => {
             if (event && event.data && event.data.type === "streamlit:render") {
                 if (!isReady) {
                     isReady = true;
                     
-                    // UIをアクティブ化
+                    // UI部品を有効化
                     pasteContainer.className = "ready";
                     btnPasteApi.removeAttribute("disabled");
                     btnSelectFile.removeAttribute("disabled");
-                    pasteArea.setAttribute("contenteditable", "true");
                     
                     statusIndicator.className = "ready";
                     statusIndicator.innerText = "接続完了：貼り付け準備完了";
                     
-                    // モバイル向けに高さを160pxに拡張
-                    sendMessageToStreamlit("streamlit:setFrameHeight", { height: 160 });
+                    // コンポーネントの高さをコンパクトな 80px に設定
+                    sendMessageToStreamlit("streamlit:setFrameHeight", { height: 80 });
                     attachEvents();
                 }
             }
         });
 
+        // イベントリスナーの登録
         function attachEvents() {
-            // 1. クリップボードAPI経由での貼付けボタン
+            // 1. クリップボードAPI経由での貼付けボタンの動作定義
             btnPasteApi.addEventListener('click', async () => {
                 if (!isReady) return;
                 
@@ -231,9 +191,8 @@
                 statusIndicator.className = "";
                 
                 try {
-                    // Clipboard API を呼び出す
                     if (!navigator.clipboard || !navigator.clipboard.read) {
-                        throw new Error("ブラウザがクリップボード画像読み取りAPIに対応していないか、HTTP接続のため制限されています。");
+                        throw new Error("ブラウザがクリップボード画像読み取りAPIに対応していないか、制限されています。");
                     }
                     
                     const items = await navigator.clipboard.read();
@@ -252,17 +211,17 @@
                     }
                     
                     if (!imageFound) {
-                        alert("クリップボードに画像が見つかりませんでした。先にゲーム等のスクリーンショットをコピーしてください。");
+                        alert("クリップボードに画像が見つかりませんでした。先にゲーム画面等のスクリーンショットをコピーしてください。");
                         resetStatus();
                     }
                 } catch (err) {
                     console.error("[PasteBridge] Clipboard API Error: ", err);
-                    alert("クリップボードから直接貼り付けられませんでした。\n非HTTPS環境であるか、権限がありません。\n\n【解決策】\n下のテキスト領域を長押しして「貼り付け」するか、「ファイル/カメラから選択」ボタンをご利用ください。");
+                    alert("クリップボードから直接貼り付けられませんでした。\n非HTTPS環境であるか、権限がありません。\n\n【解決策】\n「ファイル/カメラから選択」ボタンをご利用ください。");
                     resetStatus();
                 }
             });
 
-            // 2. インラインファイル/カメラアップローダーボタン
+            // 2. インラインファイル/カメラアップローダーボタンの動作定義
             btnSelectFile.addEventListener('click', () => {
                 if (!isReady) return;
                 hiddenFileInput.click();
@@ -274,36 +233,7 @@
                 }
             });
 
-            // 3. 長押し・キーボードペースト用エリア
-            pasteArea.addEventListener('click', () => {
-                if (isReady) {
-                    pasteArea.focus();
-                }
-            });
-
-            pasteArea.addEventListener('paste', (e) => {
-                if (!isReady) return;
-                
-                const items = (e.clipboardData || window.clipboardData).items;
-                let imageFound = false;
-                
-                for (let item of items) {
-                    if (item.kind === 'file' && item.type.startsWith('image/')) {
-                        const file = item.getAsFile();
-                        handleFile(file);
-                        e.preventDefault();
-                        imageFound = true;
-                        break;
-                    }
-                }
-                
-                // テキストが入力されてしまうのを防ぐためのガード
-                setTimeout(() => {
-                    pasteArea.innerHTML = "";
-                }, 50);
-            });
-
-            // 4. デスクトップ用ドラッグ＆ドロップ
+            // 3. デスクトップ向けドラッグ＆ドロップ動作定義
             pasteContainer.addEventListener('dragover', (e) => {
                 e.preventDefault();
                 if (isReady) {
@@ -327,11 +257,13 @@
             });
         }
 
+        // 読み込んだ画像ファイルの処理およびBase64エンコード送信
         function handleFile(fileOrBlob) {
             const reader = new FileReader();
             reader.onload = function(event) {
                 const base64Data = event.target.result;
-                // Streamlit側にワンタイムID付きで送信し、状態残留による二重ロード競合を根本防止
+                
+                // 重複ロードを根本防止するためワンタイムIDを付与してStreamlitへ送信
                 sendMessageToStreamlit("streamlit:setComponentValue", { 
                     value: {
                         id: "paste_" + Date.now() + "_" + Math.random().toString(36).substr(2, 9),
@@ -342,19 +274,15 @@
                 statusIndicator.style.color = "#30d158";
                 statusIndicator.innerText = "画像を正常にロードしました";
                 
-                // 一時的にボタンやテキストに完了メッセージを表示
-                const originalPlaceholder = pasteArea.getAttribute("placeholder");
-                pasteArea.setAttribute("placeholder", "読み込み成功！読み取り結果を解析しています...");
-                
                 setTimeout(() => {
                     resetStatus();
-                    pasteArea.setAttribute("placeholder", originalPlaceholder);
                 }, 2000);
             };
             
             reader.readAsDataURL(fileOrBlob);
         }
 
+        // ステータス表示のリセット
         function resetStatus() {
             if (isReady) {
                 statusIndicator.style.color = "";
@@ -363,6 +291,7 @@
             }
         }
 
+        // 接続シーケンスの初期化実行
         initializeConnection();
     </script>
 </body>

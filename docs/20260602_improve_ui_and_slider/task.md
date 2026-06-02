@@ -1,0 +1,4 @@
+- [x] ペーストブリッジ（paste_bridge/index.html）の軽量化と長押し領域の削除
+- [x] メインアプリ（app.py）の空カードを4px線セパレータに置換
+- [x] 調整 Canvas HUD（fitting_hud/index.html）へのスライダー微調整ステップボタン（tabindex="-1"）の追加
+- [x] 動作確認およびUIの最終検証

@@ -1,0 +1,11 @@
+- [x] 解析の計画立案とドキュメントフォルダの作成
+- [x] ソースコードの徹底解析
+  - [x] app.py (ルートメインStreamlitアプリ) の解析
+  - [x] src/app.py (以前のStreamlitアプリ) の解析
+  - [x] src/config.py (ROI座標定義) の解析
+  - [x] src/ocr_engine.py (OCR・前処理ロジック) の解析
+  - [x] src/paste_bridge/index.html (ペーストブリッジ) の解析
+  - [x] src/fitting_hud/index.html (調整Canvas HUD) の解析
+- [x] 解析レポート（walkthrough.md）の作成と保存
+- [x] システム起動実行（Streamlitサーバーの起動）
+- [x] 最終確認とユーザーへの報告
