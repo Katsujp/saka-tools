@@ -30,9 +30,9 @@ class SakatsukuOCREngine:
         os.makedirs(model_dir, exist_ok=True)
         
         # 英語・日本語の読み取りに対応したEasyOCRのリーダーを初期化 (一時フォルダを指定)
-        self.reader = easyocr.Reader(['ja', 'en'], gpu=True, verbose=False, model_storage_dir=model_dir)
+        self.reader = easyocr.Reader(['ja', 'en'], gpu=True, verbose=False, model_storage_directory=model_dir)
         # 英語専用（数値およびアルファベット項目）のリーダーを初期化し、日本語モデルとの干渉を防止 (一時フォルダを指定)
-        self.reader_en = easyocr.Reader(['en'], gpu=True, verbose=False, model_storage_dir=model_dir)
+        self.reader_en = easyocr.Reader(['en'], gpu=True, verbose=False, model_storage_directory=model_dir)
 
     def scan_game_boundary(self, img):
         """画像外周の輝度・色差変化を縦横スキャンし、ゲーム画面の正確な4辺座標を1px単位で自動検出します。"""
